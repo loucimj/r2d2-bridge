@@ -8,6 +8,7 @@ final class Speaker {
     guard !text.isEmpty else { return }
     let utterance = AVSpeechUtterance(string: text)
     utterance.voice = Self.voice(for: language)
+    VoiceLog.write("speak [\(utterance.voice?.name ?? "default voice")]: \(text)")
     utterance.rate = AVSpeechUtteranceDefaultSpeechRate
     synth.stopSpeaking(at: .immediate)
     synth.speak(utterance)

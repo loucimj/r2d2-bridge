@@ -10,8 +10,10 @@ final class Listener: ObservableObject {
 
   @Published private(set) var phase: Phase = .off
   @Published private(set) var lastHeard = ""
-  var onCommand: ((String, Language) -> Void)?
+  /// Both recognizers' readings of the same sentence, keyed by language, plus the one that heard the wake word.
+  var onCommand: ((_ transcripts: [Language: String], _ wokeBy: Language) -> Void)?
   var onWake: ((Language) -> Void)?
+  private var heard: [Language: String] = [:]
 
   private let engine = AVAudioEngine()
   private var sessions: [Language: Session] = [:]
@@ -19,6 +21,7 @@ final class Listener: ObservableObject {
   private var pushToTalk = false
 
   private struct Session {
+    let id = UUID()
     let recognizer: SFSpeechRecognizer
     var request: SFSpeechAudioBufferRecognitionRequest
     var task: SFSpeechRecognitionTask?
@@ -76,18 +79,23 @@ final class Listener: ObservableObject {
       return phase = .denied("Microphone failed: \(error.localizedDescription)")
     }
     phase = .idle
+    VoiceLog.write("listening (input: \(format.sampleRate) Hz, \(format.channelCount) ch)")
     for lang in Language.allCases { startSession(lang) }
   }
 
   private func startSession(_ lang: Language) {
-    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: Self.locales[lang]!)), recognizer.isAvailable else { return }
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: Self.locales[lang]!)), recognizer.isAvailable else {
+      VoiceLog.write("[\(lang.rawValue)] recognizer unavailable")
+      return
+    }
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
     request.taskHint = .dictation
     if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
     var session = Session(recognizer: recognizer, request: request, task: nil)
+    let id = session.id
     session.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-      Task { @MainActor in self?.handle(lang, result: result, error: error) }
+      Task { @MainActor in self?.handle(lang, session: id, result: result, error: error) }
     }
     sessions[lang] = session
   }
@@ -101,30 +109,45 @@ final class Listener: ObservableObject {
   private func restartSession(_ lang: Language) {
     endSession(lang)
     guard isOn else { return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.startSession(lang) }
+    startSession(lang)
   }
 
-  private func handle(_ lang: Language, result: SFSpeechRecognitionResult?, error: Error?) {
+  private func handle(_ lang: Language, session id: UUID, result: SFSpeechRecognitionResult?, error: Error?) {
+    // A cancelled session still reports back once; only the live session may drive anything.
+    guard sessions[lang]?.id == id else { return }
     if let result {
       let text = result.bestTranscription.formattedString
+      if case .hearing = phase { VoiceLog.write("[\(lang.rawValue)] partial: \(text)") }
       consider(text, from: lang)
       if result.isFinal { finish(lang, text: text); restartSession(lang) }
     }
-    // Recognition sessions end after about a minute or on error; keep listening.
-    if error != nil { restartSession(lang) }
+    // Sessions end on their own after silence (1110), after about a minute, or on error; keep listening.
+    if let error {
+      let code = (error as NSError).code
+      if code != 1110 && code != 216 && code != 301 {
+        VoiceLog.write("[\(lang.rawValue)] recognizer error \(code): \(error.localizedDescription)")
+      }
+      restartSession(lang)
+    }
   }
 
   private func consider(_ text: String, from lang: Language) {
     switch phase {
     case .idle:
       guard let command = Self.afterWake(text, lang) else { return }
+      VoiceLog.write("[\(lang.rawValue)] wake word in: \(text)")
       phase = .hearing(lang)
+      heard = [lang: command]
       onWake?(lang)
       lastHeard = command
       armPause(seconds: 1.4)
-    case .hearing(let owner) where owner == lang || pushToTalk:
-      lastHeard = pushToTalk ? text : (Self.afterWake(text, lang) ?? text)
-      armPause(seconds: 1.4)
+    case .hearing(let owner):
+      // Both recognizers keep transcribing; the router picks the language that makes sense.
+      heard[lang] = pushToTalk ? text : (Self.afterWake(text, lang) ?? text)
+      if owner == lang || pushToTalk {
+        lastHeard = heard[lang] ?? text
+        armPause(seconds: 1.4)
+      }
     default:
       break
     }
@@ -143,13 +166,20 @@ final class Listener: ObservableObject {
   private func finish(_ lang: Language, text: String) {
     guard case .hearing(let owner) = phase, owner == lang || pushToTalk else { return }
     pauseTimer?.invalidate()
-    let command = (pushToTalk ? text : (Self.afterWake(text, lang) ?? text)).trimmingCharacters(in: .whitespacesAndNewlines)
+    heard[lang] = (pushToTalk ? text : (Self.afterWake(text, lang) ?? text))
+    let transcripts = heard.compactMapValues { t -> String? in
+      let clean = t.trimmingCharacters(in: .whitespacesAndNewlines)
+      return clean.isEmpty ? nil : clean
+    }
+    VoiceLog.write("command\(pushToTalk ? " (push to talk)" : "") woke by \(lang.rawValue): " +
+      transcripts.map { "[\($0.key.rawValue)] \($0.value)" }.sorted().joined(separator: " | "))
     pushToTalk = false
     phase = .idle
+    heard = [:]
     // Start fresh so the next sentence does not carry this one.
     for l in Language.allCases { restartSession(l) }
-    guard !command.isEmpty else { return }
-    onCommand?(command, lang)
+    guard !transcripts.isEmpty else { return }
+    onCommand?(transcripts, lang)
   }
 
   /// The words after the wake word, or nil when the text has no wake word.

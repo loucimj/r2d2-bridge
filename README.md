@@ -59,10 +59,15 @@ directory and node path, so rebuild after moving the project or changing Node.
 
 ## Voice commands (macOS)
 
-The menu bar app listens for **"R2"** (English) or **"Artu"** (Spanish) and takes the rest of the
-sentence as a command. Turn it on with *Listen for "R2" / "Artu"* in the menu; allow the microphone
-and speech recognition prompts once. ⌃⌥R is push-to-talk: the next sentence is a command with no
-wake word. Recognition runs on-device, in both languages at once.
+The menu bar app listens for **"R2"** or **"Artu"** and takes the rest of the sentence as a
+command. R2 answers the wake word at once: front LED blue, dome turns to you with a "hey" chirp.
+Turn it on with *Listen for "R2" / "Artu"* in the menu; allow the microphone and speech recognition
+prompts once. ⌃⌥R is push-to-talk: the next sentence is a command with no wake word.
+
+Recognition runs on-device in English and Spanish at the same time, so either wake word works
+with either language ("R2, poné música" is fine). The language is picked from the transcripts:
+accents, ñ and common words settle most sentences without the model; the rest go to the model
+with both readings and it chooses the coherent one. Replies come back in the language you spoke.
 
 Commands are routed by a local model on [Ollama](https://ollama.com) (`ollama pull qwen3:4b`),
 which answers in about a second with an intent, a one-line reply in your language and an R2 mood:

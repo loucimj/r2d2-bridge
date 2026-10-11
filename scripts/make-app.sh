@@ -9,7 +9,13 @@ node_bin="$(dirname "$(node -p 'process.execPath')")"
 claude_bin="$(command -v claude || echo /opt/homebrew/bin/claude)"
 app="$project/dist/R2 Bridge.app"
 
-(cd "$project/macos/R2Menu" && swift build -c release 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" | tail -3)
+build_log="$(mktemp)"
+if ! (cd "$project/macos/R2Menu" && swift build -c release > "$build_log" 2>&1); then
+  grep -E "error" "$build_log" | head -20
+  echo "swift build failed; the old app bundle was left untouched" >&2
+  exit 1
+fi
+grep -E "Build complete" "$build_log" | tail -1
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

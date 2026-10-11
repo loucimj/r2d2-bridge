@@ -16,26 +16,38 @@ final class Companion: ObservableObject {
   init(bridge: Bridge) {
     self.bridge = bridge
     listener.onWake = { [weak self] _ in self?.acknowledgeWake() }
-    listener.onCommand = { [weak self] text, lang in Task { await self?.handle(text, lang) } }
+    listener.onCommand = { [weak self] transcripts, wokeBy in Task { await self?.handle(transcripts, wokeBy) } }
     hotkey = Hotkey(keyCode: 15 /* R */, modifiers: [.control, .option]) { [weak self] in self?.listener.captureNow() }
     Task { routerReady = await Router.available }
+    if listening { listener.start() }
   }
 
-  func setListening(_ on: Bool) { on ? listener.start() : listener.stop() }
+  /// Remembered across launches.
+  var listening: Bool {
+    get { UserDefaults.standard.bool(forKey: "listening") }
+    set { UserDefaults.standard.set(newValue, forKey: "listening") }
+  }
+
+  func setListening(_ on: Bool) {
+    listening = on
+    on ? listener.start() : listener.stop()
+  }
 
   private func acknowledgeWake() {
-    bridge.cmd("setR2D2LogicDisplaysIntensity", [255])
-    bridge.play(audio: 2813) // R2_HEY_1
+    bridge.react("listening") // front LED blue, dome turns with a "hey" chirp
   }
 
-  private func handle(_ text: String, _ lang: Listener.Language) async {
-    log("🎤 \(text)")
+  private func handle(_ transcripts: [Listener.Language: String], _ wokeBy: Listener.Language) async {
     busy = true
     defer { busy = false }
-    let decision = await Router.decide(text, language: lang)
+    let decision = await Router.decide(transcripts, wokeBy: wokeBy)
+    let lang = Listener.Language(rawValue: decision.language) ?? wokeBy
+    let text = decision.text
+    log("🎤 \(text)")
     log("→ \(decision.intent) \(decision.arg.isEmpty ? "" : "“\(decision.arg)”")")
     speaker.say(decision.reply, language: lang)
     bridge.react(decision.mood)
+    VoiceLog.write("acting: \(decision.intent)")
 
     switch decision.intent {
     case "spotify.play":
@@ -81,7 +93,13 @@ final class Companion: ObservableObject {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
     p.arguments = ["-e", source]
-    try? p.run()
+    let err = Pipe()
+    p.standardError = err
+    p.terminationHandler = { proc in
+      let text = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      VoiceLog.write("osascript exit \(proc.terminationStatus)\(text.isEmpty ? "" : ": " + text.trimmingCharacters(in: .whitespacesAndNewlines))")
+    }
+    do { try p.run() } catch { VoiceLog.write("osascript failed to start: \(error.localizedDescription)") }
   }
 
   private func open(_ url: String) {

@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events'
 import { Animation, Audio } from './animations'
 import { FakeR2 } from './fake'
 
-export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'idle'
+export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'listening' | 'idle'
 
 // The part of spherov2.js's R2D2 we use. FakeR2 implements it too.
 export interface R2 {
@@ -70,6 +70,15 @@ const moods: Record<Mood, Reaction> = {
     await r2.setR2D2LEDColor(255, 60, 0)
     await r2.playAnimation(Animation.wwmJittery)
     await sleep(3000)
+  },
+  // Wake word heard: a quick, visible "I'm listening" before the command is understood.
+  listening: async (r2) => {
+    await r2.setR2D2FrontLEDColor(0, 120, 255)
+    await r2.setR2D2LogicDisplaysIntensity(255)
+    await r2.turnDome(40)
+    await playSound(r2, Audio.hey)
+    await sleep(700)
+    await r2.turnDome(0)
   },
   idle: async (r2) => {
     await r2.setStance(Stance.bipod)

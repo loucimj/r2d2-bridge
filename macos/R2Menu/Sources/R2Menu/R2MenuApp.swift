@@ -44,6 +44,7 @@ struct MenuContent: View {
     self.bridge = bridge
     self.companion = companion
     self.listener = companion.listener
+    _listening = State(initialValue: companion.listening)
   }
 
   var body: some View {
@@ -56,6 +57,7 @@ struct MenuContent: View {
         .onChange(of: listening) { companion.setListening($0) }
       Text(voiceText)
       ForEach(companion.transcript.suffix(4), id: \.self) { Text($0) }
+      Button("Show Voice Log") { NSWorkspace.shared.open(VoiceLog.url) }
     }
     Divider()
 
