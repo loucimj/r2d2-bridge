@@ -4,6 +4,7 @@ import Foundation
 struct BridgeConfig: Decodable {
   var projectDir: String
   var nodeBin: String
+  var claudeBin: String
   var url: String
 
   static func load() -> BridgeConfig {
@@ -13,7 +14,8 @@ struct BridgeConfig: Decodable {
       return config
     }
     return BridgeConfig(projectDir: NSHomeDirectory() + "/workspaces/loucimj/r2d2-bridge",
-                        nodeBin: "/opt/homebrew/bin", url: "http://127.0.0.1:4242")
+                        nodeBin: "/opt/homebrew/bin", claudeBin: "/opt/homebrew/bin/claude",
+                        url: "http://127.0.0.1:4242")
   }
 }
 
@@ -31,6 +33,8 @@ final class Bridge: ObservableObject {
 
   private var daemon: Process?
   private var timer: Timer?
+  /// False only after the user chose Stop; otherwise a daemon that is gone is started again.
+  private var wantsDaemon = true
 
   var ownsDaemon: Bool { daemon?.isRunning == true }
   var logURL: URL { URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/r2d2-bridge.log") }
@@ -40,7 +44,7 @@ final class Bridge: ObservableObject {
     timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
       Task { @MainActor in self?.poll() }
     }
-    Task { await pollOnce(); if state == .offline { startDaemon() } }
+    Task { await pollOnce() }
   }
 
   func poll() { Task { await pollOnce() } }
@@ -53,6 +57,7 @@ final class Bridge: ObservableObject {
       state = connected ? .connected : .connecting
     } catch {
       state = ownsDaemon ? .starting : .offline
+      if state == .offline && wantsDaemon { startDaemon() }
     }
   }
 
@@ -60,6 +65,7 @@ final class Bridge: ObservableObject {
 
   func react(_ mood: String) { post("/react/\(mood)") }
   func cmd(_ method: String, _ args: [Int] = []) { post("/cmd", json: ["method": method, "args": args]) }
+  func play(audio id: Int) { post("/play/audio/\(id)") }
 
   private func post(_ path: String, json: [String: Any]? = nil) {
     var request = URLRequest(url: URL(string: config.url + path)!)
@@ -74,6 +80,7 @@ final class Bridge: ObservableObject {
   // MARK: daemon process
 
   func startDaemon() {
+    wantsDaemon = true
     guard !ownsDaemon else { return }
     let process = Process()
     // node directly, not the tsx wrapper binary: a wrapper would sit between us and the daemon
@@ -108,7 +115,10 @@ final class Bridge: ObservableObject {
   }
 
   /// SIGINT, so the daemon puts R2 to sleep and disconnects cleanly.
-  func stopDaemon() { daemon?.interrupt() }
+  func stopDaemon() {
+    wantsDaemon = false
+    daemon?.interrupt()
+  }
 
   /// Stops the daemon and calls `done` once it has exited, or after `timeout` seconds.
   func stopDaemon(timeout: TimeInterval, done: @escaping () -> Void) {
@@ -124,7 +134,7 @@ final class Bridge: ObservableObject {
   }
 
   func restartDaemon() {
-    stopDaemon()
+    daemon?.interrupt()
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.startDaemon() }
   }
 }

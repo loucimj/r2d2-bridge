@@ -6,6 +6,7 @@
 set -e
 project="$(cd "$(dirname "$0")/.." && pwd)"
 node_bin="$(dirname "$(node -p 'process.execPath')")"
+claude_bin="$(command -v claude || echo /opt/homebrew/bin/claude)"
 app="$project/dist/R2 Bridge.app"
 
 (cd "$project/macos/R2Menu" && swift build -c release 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" | tail -3)
@@ -29,10 +30,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSBluetoothAlwaysUsageDescription</key><string>R2 Bridge talks to your Sphero R2-D2 over Bluetooth.</string>
+  <key>NSMicrophoneUsageDescription</key><string>R2 Bridge listens for “R2” and “Artu” voice commands.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>R2 Bridge turns your voice commands into text on this Mac.</string>
+  <key>NSAppleEventsUsageDescription</key><string>R2 Bridge controls Spotify, Calendar and Safari for voice commands.</string>
 </dict></plist>
 PLIST
 
-printf '{"projectDir":"%s","nodeBin":"%s","url":"http://127.0.0.1:4242"}\n' "$project" "$node_bin" > "$app/Contents/Resources/bridge.json"
+printf '{"projectDir":"%s","nodeBin":"%s","claudeBin":"%s","url":"http://127.0.0.1:4242"}\n' "$project" "$node_bin" "$claude_bin" > "$app/Contents/Resources/bridge.json"
 # A stable signing identity keeps the Bluetooth permission across rebuilds; an ad-hoc
 # signature changes every build and macOS asks again. Override with R2_SIGN_IDENTITY.
 identity="${R2_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \

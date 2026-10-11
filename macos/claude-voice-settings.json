@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(osascript:*)",
+      "Bash(open:*)",
+      "Bash(date:*)",
+      "Bash(cal:*)"
+    ],
+    "deny": ["Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"]
+  }
+}

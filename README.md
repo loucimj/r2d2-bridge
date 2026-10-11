@@ -57,6 +57,27 @@ page, the daemon log, start/stop/restart, and a Launch at Login toggle. Allow th
 prompt the first time. The bundle reads `Contents/Resources/bridge.json` for the project
 directory and node path, so rebuild after moving the project or changing Node.
 
+## Voice commands (macOS)
+
+The menu bar app listens for **"R2"** (English) or **"Artu"** (Spanish) and takes the rest of the
+sentence as a command. Turn it on with *Listen for "R2" / "Artu"* in the menu; allow the microphone
+and speech recognition prompts once. ⌃⌥R is push-to-talk: the next sentence is a command with no
+wake word. Recognition runs on-device, in both languages at once.
+
+Commands are routed by a local model on [Ollama](https://ollama.com) (`ollama pull qwen3:4b`),
+which answers in about a second with an intent, a one-line reply in your language and an R2 mood:
+
+- "Artu, poné música" / "R2, play some music" → Spotify plays
+- "R2, search quantum computing" → Safari opens a web search
+- "Artu, ¿cómo está mi calendario?" → Calendar opens, Claude summarizes today
+- "Artu, estuvo bien eso, ¿no?" → approval: happy mood and a cheeky reply
+- anything else that needs real information → handed to Claude Code
+
+The Claude tier runs `claude -p` headless with `macos/claude-voice-settings.json`, which only
+allows read-only tools, `osascript` and `open`, and loads the companion mod so R2 reacts while
+Claude works. Replies are spoken with a system voice (Spanish uses the Mexican voice when no
+Argentine one is installed). Without Ollama a few built-in patterns keep the basics working.
+
 ## Run
 
 ```bash

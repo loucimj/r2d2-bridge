@@ -6,15 +6,20 @@ import SwiftUI
 struct R2MenuApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var bridge = Bridge.shared
+  @StateObject private var companion = Companion(bridge: Bridge.shared)
 
   var body: some Scene {
     MenuBarExtra {
-      MenuContent(bridge: bridge)
+      MenuContent(bridge: bridge, companion: companion)
     } label: {
-      Image(systemName: bridge.state == .connected
-        ? "antenna.radiowaves.left.and.right"
-        : "antenna.radiowaves.left.and.right.slash")
+      Image(systemName: icon)
     }
+  }
+
+  private var icon: String {
+    if case .hearing = companion.listener.phase { return "waveform" }
+    if companion.busy { return "ellipsis.bubble" }
+    return bridge.state == .connected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
   }
 }
 
@@ -30,11 +35,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct MenuContent: View {
   @ObservedObject var bridge: Bridge
+  @ObservedObject var companion: Companion
+  @ObservedObject var listener: Listener
   @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+  @State private var listening = false
+
+  init(bridge: Bridge, companion: Companion) {
+    self.bridge = bridge
+    self.companion = companion
+    self.listener = companion.listener
+  }
 
   var body: some View {
     Text(statusText)
     if let error = bridge.lastError { Text(error) }
+    Divider()
+
+    Section("Voice") {
+      Toggle("Listen for “R2” / “Artu”", isOn: $listening)
+        .onChange(of: listening) { companion.setListening($0) }
+      Text(voiceText)
+      ForEach(companion.transcript.suffix(4), id: \.self) { Text($0) }
+    }
     Divider()
 
     Section("Moods") {
@@ -76,6 +98,13 @@ struct MenuContent: View {
     Divider()
 
     Button("Quit R2 Bridge") { NSApp.terminate(nil) }.keyboardShortcut("q")
+  }
+
+  private var voiceText: String {
+    if case .denied(let why) = listener.phase { return why }
+    if !companion.routerReady { return "Ollama model \(Router.model) not found: ollama pull \(Router.model)" }
+    if case .hearing = listener.phase { return "Listening…" }
+    return listening ? "Push to talk: ⌃⌥R" : "Off. Push to talk still works: ⌃⌥R"
   }
 
   private var statusText: String {
