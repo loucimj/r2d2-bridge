@@ -18,7 +18,13 @@ final class Companion: ObservableObject {
     listener.onWake = { [weak self] _ in self?.acknowledgeWake() }
     listener.onCommand = { [weak self] transcripts, wokeBy in Task { await self?.handle(transcripts, wokeBy) } }
     hotkey = Hotkey(keyCode: 15 /* R */, modifiers: [.control, .option]) { [weak self] in self?.listener.captureNow() }
-    Task { routerReady = await Router.available }
+    speaker.onSpeaking = { [weak self] speaking in Task { @MainActor in self?.listener.muted = speaking } }
+    Task {
+      routerReady = await Router.available
+      if routerReady { await Router.warmUp() }
+    }
+    // Keep the model resident: Ollama drops it after its keep_alive, and a cold start costs 5 s.
+    Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in Task { await Router.warmUp() } }
     if listening { listener.start() }
   }
 
@@ -51,7 +57,7 @@ final class Companion: ObservableObject {
 
     switch decision.intent {
     case "spotify.play":
-      if decision.arg.isEmpty { osascript("tell application \"Spotify\" to play") }
+      if decision.arg.isEmpty { osascript(Self.spotifyPlay) }
       else { open("spotify:search:\(decision.arg.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") }
     case "spotify.pause": osascript("tell application \"Spotify\" to pause")
     case "spotify.next": osascript("tell application \"Spotify\" to next track")
@@ -79,6 +85,20 @@ final class Companion: ObservableObject {
     log("🤖 \(answer.text)")
     speaker.say(answer.text, language: lang)
     bridge.react(answer.mood)
+  }
+
+  /// A bare `play` does nothing when Spotify has no track queued (fresh launch), so start a playlist then.
+  /// Override with `defaults write com.loucimj.r2d2-bridge spotifyFallback spotify:playlist:...`.
+  static var spotifyPlay: String {
+    let fallback = UserDefaults.standard.string(forKey: "spotifyFallback") ?? "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+    return """
+    tell application "Spotify"
+      activate
+      play
+      delay 1
+      if player state is not playing then play track "\(fallback)"
+    end tell
+    """
   }
 
   /// `open -a`: finds apps by name the way Spotlight does, optionally with a URL to show.

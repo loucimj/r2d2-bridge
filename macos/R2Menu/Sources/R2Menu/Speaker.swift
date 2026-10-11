@@ -1,8 +1,29 @@
 import AVFoundation
 
 /// Speaks replies with a system voice in the command's language.
-final class Speaker {
+final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
   private let synth = AVSpeechSynthesizer()
+  /// True from the first word to half a second after the last, so the microphone can ignore R2's own voice.
+  var onSpeaking: ((Bool) -> Void)?
+
+  override init() {
+    super.init()
+    synth.delegate = self
+  }
+
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+    onSpeaking?(true)
+  }
+
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      if self?.synth.isSpeaking == false { self?.onSpeaking?(false) }
+    }
+  }
+
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    onSpeaking?(false)
+  }
 
   func say(_ text: String, language: Listener.Language) {
     guard !text.isEmpty else { return }

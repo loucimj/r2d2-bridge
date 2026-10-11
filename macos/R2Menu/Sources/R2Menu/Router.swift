@@ -70,8 +70,9 @@ enum Router {
       return decision
     } catch {
       VoiceLog.write("router failed (\(error.localizedDescription)), using fallback")
-      var decision = fallback(transcripts[wokeBy] ?? transcripts.values.first ?? "", wokeBy)
-      decision.text = transcripts[wokeBy] ?? ""
+      let lang = sure ?? wokeBy
+      var decision = fallback(transcripts[lang] ?? transcripts.values.first ?? "", lang)
+      decision.text = transcripts[lang] ?? ""
       return decision
     }
   }
@@ -99,6 +100,22 @@ enum Router {
     return nil
   }
 
+  /// Loads the model into memory so the first command does not pay the 5 s cold start.
+  static func warmUp() async {
+    var request = URLRequest(url: ollama.appending(path: "api/chat"), timeoutInterval: 60)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: [
+      "model": model, "stream": false, "think": false, "keep_alive": "30m",
+      "messages": [["role": "system", "content": system], ["role": "user", "content": "Spanish: hola"]],
+      "options": ["num_predict": 1],
+    ])
+    let started = Date()
+    if (try? await URLSession.shared.data(for: request)) != nil {
+      VoiceLog.write(String(format: "router warm (%.1f s)", Date().timeIntervalSince(started)))
+    }
+  }
+
   static var available: Bool {
     get async {
       guard let (data, _) = try? await URLSession.shared.data(from: ollama.appending(path: "api/tags")),
@@ -108,7 +125,7 @@ enum Router {
   }
 
   private static func ask(_ text: String) async throws -> Decision {
-    var request = URLRequest(url: ollama.appending(path: "api/chat"), timeoutInterval: 8)
+    var request = URLRequest(url: ollama.appending(path: "api/chat"), timeoutInterval: 20)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONSerialization.data(withJSONObject: [

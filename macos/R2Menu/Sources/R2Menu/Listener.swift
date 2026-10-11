@@ -14,11 +14,17 @@ final class Listener: ObservableObject {
   var onCommand: ((_ transcripts: [Language: String], _ wokeBy: Language) -> Void)?
   var onWake: ((Language) -> Void)?
   private var heard: [Language: String] = [:]
+  private var lastLogged: [Language: String] = [:]
 
   private let engine = AVAudioEngine()
   private var sessions: [Language: Session] = [:]
+  private let feed = RequestFeed()
   private var pauseTimer: Timer?
   private var pushToTalk = false
+  /// Set while R2's own voice plays, so it cannot wake or command itself.
+  var muted = false {
+    didSet { if muted != oldValue { VoiceLog.write(muted ? "muted while speaking" : "unmuted"); if !muted { for l in Language.allCases { restartSession(l) } } } }
+  }
 
   private struct Session {
     let id = UUID()
@@ -28,10 +34,9 @@ final class Listener: ObservableObject {
   }
 
   private static let locales: [Language: String] = [.en: "en-US", .es: "es-AR"]
-  private static let wake: [Language: [String]] = [
-    .en: ["r2", "r 2", "artoo", "are two", "are too"],
-    .es: ["artu", "arturo", "arturito", "r2", "erre dos"],
-  ]
+  // Matched after lowercasing and stripping accents, so "Artú", "Arturo", "R-2", "Artoo" all count.
+  // "Artú" often arrives as a bare "Tú"; that is accepted only at the start of a transcript.
+  private static let wake = "(\\b(artu|arto|artur|arturo|arturito|artoo|ar2|r2|r 2|r two|are too|are two|erre dos)\\b|^ ?(tu|too|two)\\b)"
 
   var isOn: Bool { phase != .off }
 
@@ -70,8 +75,10 @@ final class Listener: ObservableObject {
   private func begin() {
     let input = engine.inputNode
     let format = input.outputFormat(forBus: 0)
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-      Task { @MainActor in self?.sessions.values.forEach { $0.request.append(buffer) } }
+    // Append on the audio thread: the engine reuses the buffer once this block returns.
+    let feed = self.feed
+    input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+      feed.append(buffer)
     }
     do {
       try engine.start()
@@ -91,16 +98,23 @@ final class Listener: ObservableObject {
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
     request.taskHint = .dictation
-    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+    // Server-side by default: on-device sessions on this Mac end with "no speech" 100 ms after
+    // starting. Opt in with `defaults write com.loucimj.r2d2-bridge onDevice -bool true`.
+    if recognizer.supportsOnDeviceRecognition && UserDefaults.standard.bool(forKey: "onDevice") {
+      request.requiresOnDeviceRecognition = true
+    }
     var session = Session(recognizer: recognizer, request: request, task: nil)
     let id = session.id
     session.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       Task { @MainActor in self?.handle(lang, session: id, result: result, error: error) }
     }
     sessions[lang] = session
+    feed.set(lang.rawValue, request)
+    VoiceLog.write("[\(lang.rawValue)] session started (on-device: \(request.requiresOnDeviceRecognition))")
   }
 
   private func endSession(_ lang: Language) {
+    feed.set(lang.rawValue, nil)
     sessions[lang]?.request.endAudio()
     sessions[lang]?.task?.cancel()
     sessions[lang] = nil
@@ -117,21 +131,23 @@ final class Listener: ObservableObject {
     guard sessions[lang]?.id == id else { return }
     if let result {
       let text = result.bestTranscription.formattedString
-      if case .hearing = phase { VoiceLog.write("[\(lang.rawValue)] partial: \(text)") }
+      if text != lastLogged[lang] {
+        lastLogged[lang] = text
+        VoiceLog.write("[\(lang.rawValue)] \(phase == .idle ? "idle" : "partial"): \(text)")
+      }
       consider(text, from: lang)
       if result.isFinal { finish(lang, text: text); restartSession(lang) }
     }
     // Sessions end on their own after silence (1110), after about a minute, or on error; keep listening.
     if let error {
       let code = (error as NSError).code
-      if code != 1110 && code != 216 && code != 301 {
-        VoiceLog.write("[\(lang.rawValue)] recognizer error \(code): \(error.localizedDescription)")
-      }
+      VoiceLog.write("[\(lang.rawValue)] session ended, error \(code): \(error.localizedDescription) (fed \(feed.frames) frames so far)")
       restartSession(lang)
     }
   }
 
   private func consider(_ text: String, from lang: Language) {
+    if muted { return }
     switch phase {
     case .idle:
       guard let command = Self.afterWake(text, lang) else { return }
@@ -182,17 +198,48 @@ final class Listener: ObservableObject {
     onCommand?(transcripts, lang)
   }
 
-  /// The words after the wake word, or nil when the text has no wake word.
+  /// The words after the wake word, in the recognizer's own spelling, or nil when there is no wake word.
   static func afterWake(_ text: String, _ lang: Language) -> String? {
-    let lower = text.lowercased()
-      .replacingOccurrences(of: "[,.!?¿¡]", with: " ", options: .regularExpression)
-      .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
-    for word in wake[lang]! {
-      guard let range = lower.range(of: "\\b\(word)\\b", options: .regularExpression) else { continue }
-      return String(lower[range.upperBound...])
-    }
-    return nil
+    let words = text.split(separator: " ").map(String.init)
+    let plain = words.map {
+      $0.lowercased().folding(options: .diacriticInsensitive, locale: nil)
+        .replacingOccurrences(of: "[,.!?¿¡]", with: "", options: .regularExpression)
+        .replacingOccurrences(of: "-", with: " ")
+    }.joined(separator: " ")
+    guard let range = plain.range(of: wake, options: .regularExpression) else { return nil }
+    let consumed = plain[..<range.upperBound].split(separator: " ").count
+    return words.dropFirst(consumed).joined(separator: " ")
   }
 }
 
 extension Listener.Language: CaseIterable {}
+
+/// The live recognition requests, readable from the audio thread.
+final class RequestFeed: @unchecked Sendable {
+  private let lock = NSLock()
+  private var requests: [String: SFSpeechAudioBufferRecognitionRequest] = [:]
+
+  func set(_ key: String, _ request: SFSpeechAudioBufferRecognitionRequest?) {
+    lock.lock()
+    requests[key] = request
+    lock.unlock()
+  }
+
+  private(set) var frames = 0
+
+  func append(_ buffer: AVAudioPCMBuffer) {
+    lock.lock()
+    let current = Array(requests.values)
+    frames += Int(buffer.frameLength)
+    let first = frames == Int(buffer.frameLength)
+    lock.unlock()
+    if first { VoiceLog.write("audio flowing: first buffer \(buffer.frameLength) frames, \(buffer.format.sampleRate) Hz, requests: \(current.count)") }
+    // Once a second, the peak level: 0 means the microphone is delivering silence.
+    if frames / 44100 != (frames - Int(buffer.frameLength)) / 44100, let data = buffer.floatChannelData?[0] {
+      var peak: Float = 0
+      for i in 0..<Int(buffer.frameLength) { peak = max(peak, abs(data[i])) }
+      VoiceLog.write(String(format: "level: peak %.4f", peak))
+    }
+    current.forEach { $0.append(buffer) }
+  }
+}
