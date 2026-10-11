@@ -25,6 +25,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     onSpeaking?(false)
   }
 
+  private var generation = 0
+
   func say(_ text: String, language: Listener.Language) {
     guard !text.isEmpty else { return }
     let utterance = AVSpeechUtterance(string: text)
@@ -33,6 +35,15 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     utterance.rate = AVSpeechUtteranceDefaultSpeechRate
     synth.stopSpeaking(at: .immediate)
     synth.speak(utterance)
+    // The delegate's didFinish is not always delivered; never leave the microphone muted.
+    generation += 1
+    let mine = generation
+    let budget = 1.5 + Double(text.count) * 0.09
+    DispatchQueue.main.asyncAfter(deadline: .now() + budget) { [weak self] in
+      guard let self, self.generation == mine else { return }
+      self.synth.stopSpeaking(at: .word)
+      self.onSpeaking?(false)
+    }
   }
 
   private static func voice(for language: Listener.Language) -> AVSpeechSynthesisVoice? {

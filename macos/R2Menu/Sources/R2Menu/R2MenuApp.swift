@@ -58,6 +58,7 @@ struct MenuContent: View {
       Text(voiceText)
       ForEach(companion.transcript.suffix(4), id: \.self) { Text($0) }
       Button("Show Voice Log") { NSWorkspace.shared.open(VoiceLog.url) }
+      Button("Edit Phrases…") { _ = Phrases.load(); NSWorkspace.shared.open(Phrases.url) }
     }
     Divider()
 

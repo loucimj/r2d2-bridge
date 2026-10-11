@@ -46,6 +46,18 @@ final class Companion: ObservableObject {
   private func handle(_ transcripts: [Listener.Language: String], _ wokeBy: Listener.Language) async {
     busy = true
     defer { busy = false }
+    if let phrase = Phrases.match(transcripts) {
+      VoiceLog.write("phrase: \(phrase.match[0])")
+      log("🎤 \(transcripts[wokeBy] ?? transcripts.values.first ?? "")")
+      log("→ phrase “\(phrase.match[0])”")
+      let lang: Listener.Language = Router.pickLanguage(transcripts, wokeBy: wokeBy) ?? wokeBy
+      if let reply = phrase.reply { speaker.say(reply, language: lang) }
+      bridge.react(phrase.mood ?? "happy")
+      if let id = phrase.animation { bridge.play(animation: id) }
+      if let uri = phrase.spotify { osascript("tell application \"Spotify\"\nactivate\nplay track \"\(uri)\"\nend tell") }
+      if let target = phrase.open { target.contains("://") ? open(target) : launch(app: target) }
+      return
+    }
     let decision = await Router.decide(transcripts, wokeBy: wokeBy)
     let lang = Listener.Language(rawValue: decision.language) ?? wokeBy
     let text = decision.text

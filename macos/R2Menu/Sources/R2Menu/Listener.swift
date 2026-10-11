@@ -15,6 +15,8 @@ final class Listener: ObservableObject {
   var onWake: ((Language) -> Void)?
   private var heard: [Language: String] = [:]
   private var lastLogged: [Language: String] = [:]
+  private var lastPartialAt = Date.distantPast
+  private var silenceTimer: Timer?
 
   private let engine = AVAudioEngine()
   private var sessions: [Language: Session] = [:]
@@ -23,7 +25,11 @@ final class Listener: ObservableObject {
   private var pushToTalk = false
   /// Set while R2's own voice plays, so it cannot wake or command itself.
   var muted = false {
-    didSet { if muted != oldValue { VoiceLog.write(muted ? "muted while speaking" : "unmuted"); if !muted { for l in Language.allCases { restartSession(l) } } } }
+    didSet {
+      guard muted != oldValue else { return }
+      VoiceLog.write(muted ? "muted while speaking" : "unmuted")
+      if !muted { lastLogged = [:]; for l in Language.allCases { restartSession(l) } }
+    }
   }
 
   private struct Session {
@@ -36,7 +42,7 @@ final class Listener: ObservableObject {
   private static let locales: [Language: String] = [.en: "en-US", .es: "es-AR"]
   // Matched after lowercasing and stripping accents, so "Artú", "Arturo", "R-2", "Artoo" all count.
   // "Artú" often arrives as a bare "Tú"; that is accepted only at the start of a transcript.
-  private static let wake = "(\\b(artu|arto|artur|arturo|arturito|artoo|ar2|r2|r 2|r two|are too|are two|erre dos)\\b|^ ?(tu|too|two)\\b)"
+  private static let wake = "(\\b(artu|arto|artur|arturo|arturito|artoo|ar2|r2|r 2|r two|art two|are too|are two|erre dos)\\b|^ ?(tu|too|two|art|arte|harto|r)\\b)"
 
   var isOn: Bool { phase != .off }
 
@@ -57,6 +63,7 @@ final class Listener: ObservableObject {
 
   func stop() {
     pauseTimer?.invalidate()
+    silenceTimer?.invalidate()
     for lang in sessions.keys { endSession(lang) }
     engine.stop()
     engine.inputNode.removeTap(onBus: 0)
@@ -88,6 +95,16 @@ final class Listener: ObservableObject {
     phase = .idle
     VoiceLog.write("listening (input: \(format.sampleRate) Hz, \(format.channelCount) ch)")
     for lang in Language.allCases { startSession(lang) }
+    // A transcript grows for up to a minute and the wake word must open a sentence, so after
+    // every pause in speech the sessions restart and the next sentence begins a fresh transcript.
+    silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        guard let self, self.phase == .idle, !self.muted, !self.lastLogged.isEmpty,
+              Date().timeIntervalSince(self.lastPartialAt) > 1.5 else { return }
+        self.lastLogged = [:]
+        for l in Language.allCases { self.restartSession(l) }
+      }
+    }
   }
 
   private func startSession(_ lang: Language) {
@@ -133,6 +150,7 @@ final class Listener: ObservableObject {
       let text = result.bestTranscription.formattedString
       if text != lastLogged[lang] {
         lastLogged[lang] = text
+        lastPartialAt = Date()
         VoiceLog.write("[\(lang.rawValue)] \(phase == .idle ? "idle" : "partial"): \(text)")
       }
       consider(text, from: lang)

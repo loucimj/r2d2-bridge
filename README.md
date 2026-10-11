@@ -78,6 +78,13 @@ which answers in about a second with an intent, a one-line reply in your languag
 - "Artu, estuvo bien eso, ¿no?" → approval: happy mood and a cheeky reply
 - anything else that needs real information → handed to Claude Code
 
+**Your own phrases** go in `~/Library/Application Support/R2 Bridge/phrases.json` (menu →
+*Edit Phrases…*; created with an example on first run). They are matched before the model, so
+they are instant and exact. Each entry has `match` (any of these, accent-insensitive substrings)
+and any of `reply`, `mood`, `spotify` (a `spotify:track:` / `album:` / `playlist:` URI),
+`open` (URL or app name) and `animation` (raw id). The example plays Highway to Hell for
+"R2, daddy is home" or "Artu, llegó papá".
+
 The Claude tier runs `claude -p` headless with `macos/claude-voice-settings.json`, which only
 allows read-only tools, `osascript` and `open`, and loads the companion mod so R2 reacts while
 Claude works. Replies are spoken with a system voice (Spanish uses the Mexican voice when no
