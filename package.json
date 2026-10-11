@@ -1,0 +1,30 @@
+{
+  "name": "r2d2-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "r2": "bin/r2"
+  },
+  "description": "Makes a Sphero R2-D2 react to what happens on your computer",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "explore": "tsx src/explore.ts",
+    "typecheck": "tsc --noEmit",
+    "app": "sh scripts/make-app.sh && open \"dist/R2 Bridge.app\"",
+    "app:stop": "pkill -INT -x \"R2 Bridge\" || pkill -INT -f \"tsx src/index.ts\" || true",
+    "log": "tail -f ~/Library/Logs/r2d2-bridge.log"
+  },
+  "dependencies": {
+    "@abandonware/noble": "^1.9.2-26",
+    "spherov2.js": "^0.1.25"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "@abandonware/noble@1.9.2-26": true,
+    "esbuild@0.28.2": true
+  }
+}

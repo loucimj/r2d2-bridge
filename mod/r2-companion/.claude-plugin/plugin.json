@@ -1,0 +1,13 @@
+{
+  "name": "r2-companion",
+  "version": "0.1.0",
+  "description": "Your Sphero R2-D2 reacts to this session: thinking, edits, errors, finished turns and permission prompts.",
+  "userConfig": {
+    "bridgeUrl": {
+      "type": "string",
+      "default": "http://127.0.0.1:4242",
+      "description": "Where the r2d2-bridge daemon listens",
+      "title": "Bridge URL"
+    }
+  }
+}

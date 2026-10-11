@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R2 Bridge</title>
+<style>
+  :root { color-scheme: dark; --bg: #0f1216; --card: #171c23; --line: #262d37; --text: #e6e9ee; --muted: #8a94a3; --blue: #3b8bff; --ok: #35c46a; --bad: #ff5a5a }
+  * { box-sizing: border-box }
+  body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1100px; margin-inline: auto }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px }
+  h1 { font-size: 20px; margin: 0 }
+  h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 28px 0 10px }
+  #status { color: var(--muted) } #status.on { color: var(--ok) } #status.off { color: var(--bad) }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px }
+  .item { display: grid; grid-template-columns: auto 1fr; gap: 6px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px }
+  .item b { font-weight: 500 } .item small { color: var(--muted) }
+  .item input { grid-column: 1 / -1; background: transparent; border: 0; border-top: 1px solid var(--line); color: var(--text); padding: 6px 4px 2px; font: inherit; font-size: 12px }
+  .item input::placeholder { color: var(--muted) }
+  button { background: var(--card); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; text-align: left }
+  button:hover { border-color: var(--blue) } button:active { background: #1f2733 }
+  .play { padding: 6px 8px; min-width: 56px; text-align: center; font-variant-numeric: tabular-nums }
+  .moods button { font-size: 15px; padding: 14px 18px; text-align: center }
+  .moods { display: flex; gap: 8px; flex-wrap: wrap }
+  .controls { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px }
+  .ctl { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px }
+  .ctl label { display: flex; justify-content: space-between; color: var(--muted) }
+  .ctl input[type=range] { width: 100% } .ctl .row { display: flex; gap: 8px; flex-wrap: wrap } .ctl .row button { flex: 1; text-align: center }
+  input[type=color] { width: 100%; height: 36px; border: 0; background: transparent; padding: 0 }
+  .free { display: flex; gap: 8px } .free input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px; font: inherit }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; color: var(--muted); opacity: 0; transition: opacity .2s; pointer-events: none }
+  #toast.show { opacity: 1 }
+</style>
+</head>
+<body>
+<header><h1>R2 Bridge</h1><span id="status">connecting…</span></header>
+
+<h2>Moods</h2>
+<div class="moods" id="moods"></div>
+
+<h2>Controls</h2>
+<div class="controls">
+  <div class="ctl"><label>Dome <span id="domeVal">0°</span></label><input type="range" id="dome" min="-180" max="180" value="0"><div class="row"><button data-cmd="turnDome" data-args="0">Center</button></div></div>
+  <div class="ctl"><label>Stance</label><div class="row"><button data-cmd="setStance" data-args="2">Bipod</button><button data-cmd="setStance" data-args="1">Tripod</button></div></div>
+  <div class="ctl"><label>Main LEDs</label><input type="color" data-color="setR2D2LEDColor" value="#0000ff"></div>
+  <div class="ctl"><label>Front LED</label><input type="color" data-color="setR2D2FrontLEDColor" value="#0000ff"></div>
+  <div class="ctl"><label>Back LED</label><input type="color" data-color="setR2D2BackLEDcolor" value="#ff0000"></div>
+  <div class="ctl"><label>Holo projector <span id="holoVal">0</span></label><input type="range" id="holo" data-range="setR2D2HoloProjectorIntensity" min="0" max="255" value="0"></div>
+  <div class="ctl"><label>Logic displays <span id="logicVal">0</span></label><input type="range" id="logic" data-range="setR2D2LogicDisplaysIntensity" min="0" max="255" value="0"></div>
+  <div class="ctl"><label>Volume <span id="volVal">200</span></label><input type="range" id="vol" data-range="setAudioVolume" min="0" max="255" value="200"></div>
+  <div class="ctl"><label>Power & lights</label><div class="row"><button data-cmd="wake" data-args="">Wake</button><button data-cmd="sleep" data-args="">Sleep</button><button data-cmd="startIdleLedAnimation" data-args="">Idle LEDs</button></div></div>
+</div>
+
+<h2>Animations <small id="animationCount"></small></h2>
+<p style="color:var(--muted);margin:0 0 10px">Names come from the Python spherov2 port and are unverified. Type what you see and press Enter; notes are saved to <code>explore-log.tsv</code>.</p>
+<div class="grid" id="animations"></div>
+<div class="free" style="margin-top:8px"><input id="animFree" type="number" min="0" max="255" placeholder="any animation id"><button onclick="playFree('animation')">Play</button></div>
+
+<h2>Audio <small id="audioCount"></small></h2>
+<div class="grid" id="audio"></div>
+<div class="free" style="margin-top:8px"><input id="audioFree" type="number" min="0" max="65535" placeholder="any audio id (16-bit)"><button onclick="playFree('audio')">Play</button></div>
+
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s)
+let toastTimer
+const toast = (msg, bad) => {
+  const t = $('#toast'); t.textContent = msg; t.style.color = bad ? 'var(--bad)' : 'var(--muted)'
+  t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800)
+}
+const post = async (path, body) => {
+  const res = await fetch(path, { method: 'POST', headers: body ? { 'content-type': 'application/json' } : {}, body: body && JSON.stringify(body) })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) toast(data.error || res.statusText, true)
+  return res.ok
+}
+const cmd = (method, ...args) => post('/cmd', { method, args })
+const play = (kind, id) => post(`/play/${kind}/${id}`).then((ok) => ok && toast(`${kind} ${id}`))
+const playFree = (kind) => { const v = $(`#${kind}Free`).value; if (v !== '') play(kind, Number(v)) }
+const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16))
+const debounce = (fn, ms = 120) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms) } }
+
+async function build() {
+  const [cat, notes] = await Promise.all([fetch('/catalog').then((r) => r.json()), fetch('/notes').then((r) => r.json())])
+  $('#moods').innerHTML = cat.moods.map((m) => `<button onclick="post('/react/${m}').then(ok => ok && toast('${m}'))">${m}</button>`).join('')
+  for (const kind of ['animation', 'audio']) {
+    const map = kind === 'animation' ? cat.animations : cat.audio
+    const items = Object.entries(map).sort((a, b) => a[1] - b[1])
+    $(`#${kind}Count`).textContent = `${items.length} named`
+    $(`#${kind === 'animation' ? 'animations' : 'audio'}`).innerHTML = items.map(([name, id]) => `
+      <div class="item">
+        <button class="play" onclick="play('${kind}', ${id})">${id}</button>
+        <span><b>${name}</b></span>
+        <input placeholder="note…" value="${(notes[`${kind}:${id}`] || '').replace(/"/g, '&quot;')}"
+          onkeydown="if (event.key === 'Enter') { post('/note', { kind: '${kind}', id: ${id}, note: this.value }).then(ok => ok && toast('saved')); this.blur() }">
+      </div>`).join('')
+  }
+}
+
+document.querySelectorAll('[data-cmd]').forEach((b) => b.onclick = () => cmd(b.dataset.cmd, ...(b.dataset.args ? b.dataset.args.split(',').map(Number) : [])))
+document.querySelectorAll('[data-color]').forEach((i) => i.oninput = debounce(() => cmd(i.dataset.color, ...hex(i.value))))
+document.querySelectorAll('[data-range]').forEach((i) => {
+  const out = i.parentElement.querySelector('label span')
+  i.oninput = () => { out.textContent = i.value; send() }
+  const send = debounce(() => cmd(i.dataset.range, Number(i.value)))
+})
+$('#dome').oninput = debounce(() => { $('#domeVal').textContent = `${$('#dome').value}°`; cmd('turnDome', Number($('#dome').value)) }, 60)
+$('#dome').addEventListener('input', () => $('#domeVal').textContent = `${$('#dome').value}°`)
+
+async function poll() {
+  try {
+    const h = await fetch('/health').then((r) => r.json())
+    $('#status').textContent = h.connected ? 'connected' : 'not connected, reconnecting…'
+    $('#status').className = h.connected ? 'on' : 'off'
+  } catch { $('#status').textContent = 'daemon not reachable'; $('#status').className = 'off' }
+}
+build(); poll(); setInterval(poll, 5000)
+</script>
+</body>
+</html>

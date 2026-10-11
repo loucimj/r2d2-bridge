@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launches the r2d2-bridge CLI from any directory. `npm link` puts this on your PATH as `r2`.
+dir="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec "$dir/node_modules/.bin/tsx" "$dir/src/cli.ts" "$@"
