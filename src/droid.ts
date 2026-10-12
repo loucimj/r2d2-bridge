@@ -2,7 +2,7 @@ import type { EventEmitter } from 'node:events'
 import { Animation, Audio } from './animations'
 import { FakeR2 } from './fake'
 
-export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'listening' | 'idle'
+export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'listening' | 'welcome' | 'goodbye' | 'idle'
 
 // The part of spherov2.js's R2D2 we use. FakeR2 implements it too.
 export interface R2 {
@@ -30,6 +30,12 @@ type Reaction = (r2: R2) => Promise<unknown>
 
 const KEEP_ALIVE_MS = 60_000
 const RECONNECT_DELAY_MS = 5_000
+const RECONNECT_DELAY_AWAY_MS = 30_000 // once the droid has been gone a while
+const AWAY_AFTER_MS = 10 * 60_000
+const GREET_AFTER_MS = 60_000 // a reconnect after a longer absence gets a welcome
+const RSSI_MS = 5_000
+const GOODBYE_RSSI = Number(process.env.R2_GOODBYE_RSSI ?? -88) // dBm; three readings below this = walking away
+const GOODBYE_RECOVER_RSSI = GOODBYE_RSSI + 8
 const FAKE = process.env.R2_FAKE === '1'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -80,6 +86,26 @@ const moods: Record<Mood, Reaction> = {
     await sleep(700)
     await r2.turnDome(0)
   },
+  // Back in range after being away.
+  welcome: async (r2) => {
+    await r2.setR2D2LEDColor(0, 200, 60)
+    await r2.turnDome(60)
+    await playSound(r2, Audio.hey)
+    await sleep(700)
+    await r2.turnDome(-30)
+    await sleep(400)
+    await r2.turnDome(0)
+  },
+  // Signal fading: a small wave before the link drops.
+  goodbye: async (r2) => {
+    await r2.setR2D2BackLEDcolor(255, 40, 0)
+    await r2.turnDome(-60)
+    await sleep(400)
+    await r2.turnDome(60)
+    await sleep(400)
+    await r2.turnDome(0)
+    await playSound(r2, Audio.sad)
+  },
   idle: async (r2) => {
     await r2.setStance(Stance.bipod)
     await r2.setR2D2LEDColor(0, 0, 0)
@@ -115,9 +141,25 @@ export class Droid {
   private r2?: R2
   private queue: Promise<unknown> = Promise.resolve()
   private keepAlive?: NodeJS.Timeout
+  private rssiTimer?: NodeJS.Timeout
   private detach?: () => void
   private reconnecting = false
   private stopped = false
+  private disconnectedAt?: number
+  private saidGoodbye = false
+  private weakReadings = 0
+  /** Last signal strength in dBm, for /health and tuning. */
+  rssi?: number
+
+  /** When the droid went out of reach, or undefined while connected. */
+  get awaySince(): Date | undefined {
+    return this.disconnectedAt === undefined ? undefined : new Date(this.disconnectedAt)
+  }
+
+  private get reconnectDelay(): number {
+    const away = this.disconnectedAt === undefined ? 0 : Date.now() - this.disconnectedAt
+    return away > AWAY_AFTER_MS ? RECONNECT_DELAY_AWAY_MS : RECONNECT_DELAY_MS
+  }
 
   /** Scans until an R2-D2 is found and keeps it awake. Resolves once connected. */
   async connect(): Promise<void> {
@@ -137,11 +179,11 @@ export class Droid {
           return
         }
         if (r2) return this.attach(r2)
-        console.log(`No R2-D2 found, retrying in ${RECONNECT_DELAY_MS / 1000}s`)
+        console.log(`No R2-D2 found, retrying in ${this.reconnectDelay / 1000}s`)
       } catch (e) {
-        console.error(`Connecting to R2-D2 failed (${errorText(e)}), retrying in ${RECONNECT_DELAY_MS / 1000}s`)
+        console.error(`Connecting to R2-D2 failed (${errorText(e)}), retrying in ${this.reconnectDelay / 1000}s`)
       }
-      await sleep(RECONNECT_DELAY_MS)
+      await sleep(this.reconnectDelay)
     }
   }
 
@@ -184,6 +226,7 @@ export class Droid {
   async shutdown(): Promise<void> {
     this.stopped = true
     clearInterval(this.keepAlive)
+    clearInterval(this.rssiTimer)
     const r2 = this.r2
     this.r2 = undefined
     if (!r2) return
@@ -193,15 +236,40 @@ export class Droid {
 
   private attach(r2: R2) {
     this.r2 = r2
+    const awayFor = this.disconnectedAt === undefined ? 0 : Date.now() - this.disconnectedAt
+    this.disconnectedAt = undefined
+    this.saidGoodbye = false
+    this.weakReadings = 0
     // noble reuses one Peripheral object per device across reconnects, so the listener must be removed.
     const peripheral = peripheralOf(r2)
     const onDrop = () => this.onDisconnect(r2)
     peripheral.once('disconnect', onDrop)
     this.detach = () => peripheral.removeListener('disconnect', onDrop)
     this.keepAlive = setInterval(() => this.ping(), KEEP_ALIVE_MS)
+    if (typeof peripheral.updateRssi === 'function') this.rssiTimer = setInterval(() => this.readRssi(r2), RSSI_MS)
     // Queued so it cannot interleave with a reaction that arrives right after connecting.
     this.queue = this.queue.then(() => r2.setAudioVolume(200)).then(() => moods.idle(r2)).catch(() => {})
-    console.log('R2-D2 ready')
+    console.log(awayFor ? `R2-D2 ready again after ${Math.round(awayFor / 1000)}s away` : 'R2-D2 ready')
+    if (awayFor > GREET_AFTER_MS) this.react('welcome').catch(() => {})
+  }
+
+  private readRssi(r2: R2) {
+    if (this.r2 !== r2) return
+    peripheralOf(r2).updateRssi?.((err, rssi) => {
+      if (err || this.r2 !== r2 || typeof rssi !== 'number') return
+      this.rssi = rssi
+      if (rssi < GOODBYE_RSSI) this.weakReadings++
+      else if (rssi > GOODBYE_RECOVER_RSSI) {
+        this.weakReadings = 0
+        this.saidGoodbye = false
+      }
+      if (this.weakReadings % 6 === 1 || rssi < GOODBYE_RSSI) console.log(`rssi ${rssi} dBm`)
+      if (this.weakReadings >= 3 && !this.saidGoodbye) {
+        this.saidGoodbye = true
+        console.log('signal fading, saying goodbye')
+        this.react('goodbye').catch(() => {})
+      }
+    })
   }
 
   // Cannot overlap itself: wake() rejects after the library's 5 s command timeout, well under KEEP_ALIVE_MS.
@@ -223,15 +291,18 @@ export class Droid {
     if (this.stopped || this.reconnecting || source !== this.r2) return
     this.reconnecting = true
     clearInterval(this.keepAlive)
+    clearInterval(this.rssiTimer)
     this.detach?.()
     this.r2 = undefined
+    this.rssi = undefined
+    this.disconnectedAt = Date.now()
     console.warn('R2-D2 disconnected, reconnecting…')
     this.reconnectLoop().finally(() => (this.reconnecting = false))
   }
 
   private async reconnectLoop() {
     while (!this.stopped) {
-      await sleep(RECONNECT_DELAY_MS)
+      await sleep(this.reconnectDelay)
       try {
         await this.connect()
         return
@@ -242,8 +313,9 @@ export class Droid {
   }
 }
 
-// `peripheral` is private in spherov2.js but it is the only way to hear about drops.
-const peripheralOf = (r2: R2) => (r2 as unknown as { peripheral: EventEmitter }).peripheral
+// `peripheral` is private in spherov2.js but it is the only way to hear about drops or read signal strength.
+type Peripheral = EventEmitter & { updateRssi?: (cb: (err: Error | null, rssi: number) => void) => void }
+const peripheralOf = (r2: R2) => (r2 as unknown as { peripheral: Peripheral }).peripheral
 
 export async function waitForBluetooth(hintEveryMs = 10_000, giveUpMs = 60_000) {
   const noble = (await import('@abandonware/noble')).default

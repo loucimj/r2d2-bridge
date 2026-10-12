@@ -29,6 +29,10 @@ final class Bridge: ObservableObject {
 
   @Published private(set) var state: State = .offline
   @Published private(set) var lastError: String?
+  @Published private(set) var awaySince: Date?
+  @Published private(set) var rssi: Int?
+  /// Called on the main actor whenever `state` changes (old, new).
+  var onStateChange: ((State, State) -> Void)?
   let config = BridgeConfig.load()
 
   private var daemon: Process?
@@ -50,14 +54,25 @@ final class Bridge: ObservableObject {
   func poll() { Task { await pollOnce() } }
 
   private func pollOnce() async {
-    struct Health: Decodable { var connected: Bool }
+    struct Health: Decodable { var connected: Bool; var awaySince: Date?; var rssi: Int? }
+    let before = state
     do {
       let (data, _) = try await URLSession.shared.data(from: URL(string: config.url + "/health")!)
-      let connected = (try? JSONDecoder().decode(Health.self, from: data))?.connected ?? false
-      state = connected ? .connected : .connecting
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = .iso8601
+      let health = try? decoder.decode(Health.self, from: data)
+      state = health?.connected == true ? .connected : .connecting
+      awaySince = health?.awaySince
+      rssi = health?.rssi
     } catch {
       state = ownsDaemon ? .starting : .offline
+      awaySince = nil
+      rssi = nil
       if state == .offline && wantsDaemon { startDaemon() }
+    }
+    if state != before {
+      VoiceLog.write("bridge state \(before.rawValue) → \(state.rawValue)\(onStateChange == nil ? " (no observer)" : "")")
+      onStateChange?(before, state)
     }
   }
 

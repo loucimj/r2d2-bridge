@@ -47,8 +47,10 @@ final class Listener: ObservableObject {
   var isOn: Bool { phase != .off }
 
   func start() {
+    VoiceLog.write("listener start requested (phase: \(phase), speech auth: \(SFSpeechRecognizer.authorizationStatus().rawValue))")
     guard phase == .off else { return }
     SFSpeechRecognizer.requestAuthorization { [weak self] status in
+      VoiceLog.write("speech authorization callback: \(status.rawValue)")
       Task { @MainActor in
         guard let self else { return }
         guard status == .authorized else {

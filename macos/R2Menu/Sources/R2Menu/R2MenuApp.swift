@@ -107,13 +107,22 @@ struct MenuContent: View {
     if case .denied(let why) = listener.phase { return why }
     if !companion.routerReady { return "Ollama model \(Router.model) not found: ollama pull \(Router.model)" }
     if case .hearing = listener.phase { return "Listening…" }
+    if listening && !listener.isOn { return "Paused until R2-D2 is back" }
     return listening ? "Push to talk: ⌃⌥R" : "Off. Push to talk still works: ⌃⌥R"
   }
 
+  private static let clock: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm"
+    return f
+  }()
+
   private var statusText: String {
     switch bridge.state {
-    case .connected: return "R2-D2 connected"
-    case .connecting: return "Daemon up, looking for R2-D2…"
+    case .connected: return bridge.rssi.map { "R2-D2 connected (\($0) dBm)" } ?? "R2-D2 connected"
+    case .connecting:
+      if let since = bridge.awaySince { return "R2-D2 away since \(Self.clock.string(from: since)), looking…" }
+      return "Daemon up, looking for R2-D2…"
     case .starting: return "Starting daemon…"
     case .offline: return "Daemon not running"
     }

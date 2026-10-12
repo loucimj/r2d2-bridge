@@ -100,6 +100,15 @@ Scans for a device advertising `D2-…`, connects, sets the idle stance and wait
 A keep-alive command is sent every 60 s so the droid does not fall asleep; if the
 link drops, the daemon rescans and reconnects on its own.
 
+**Being away.** When you walk out of range the daemon scans every 5 s, backing off to
+every 30 s after ten minutes, and exits after three minutes without R2 so the menu bar app
+restarts it with a fresh Bluetooth stack. Reactions sent meanwhile are dropped. Coming back
+after more than a minute gets a `welcome` reaction. While connected the daemon reads signal
+strength every 5 s; three readings under -88 dBm trigger a `goodbye` wave before the link
+dies (tune with `R2_GOODBYE_RSSI`). The menu shows "away since" and the current dBm, and
+voice listening pauses while R2 is away. Sphero toys keep advertising in soft sleep, so
+reconnection works without touching R2; after many hours of deep sleep, tap its head.
+
 ```bash
 curl -X POST http://127.0.0.1:4242/react/happy
 curl -X POST http://127.0.0.1:4242/react/alarm

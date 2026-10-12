@@ -19,13 +19,21 @@ final class Companion: ObservableObject {
     listener.onCommand = { [weak self] transcripts, wokeBy in Task { await self?.handle(transcripts, wokeBy) } }
     hotkey = Hotkey(keyCode: 15 /* R */, modifiers: [.control, .option]) { [weak self] in self?.listener.captureNow() }
     speaker.onSpeaking = { [weak self] speaking in Task { @MainActor in self?.listener.muted = speaking } }
+    // No droid, no point streaming the microphone: pause the listener while R2 is away.
+    bridge.onStateChange = { [weak self] _, now in
+      guard let self else { return }
+      VoiceLog.write("state observer: now=\(now.rawValue) listeningPref=\(self.listening) listenerOn=\(self.listener.isOn)")
+      guard self.listening else { return }
+      if now == .connected, !self.listener.isOn { VoiceLog.write("R2 back, listening again"); self.listener.start() }
+      if now != .connected, self.listener.isOn { VoiceLog.write("R2 away, listener paused"); self.listener.stop() }
+    }
     Task {
       routerReady = await Router.available
       if routerReady { await Router.warmUp() }
     }
     // Keep the model resident: Ollama drops it after its keep_alive, and a cold start costs 5 s.
     Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in Task { await Router.warmUp() } }
-    if listening { listener.start() }
+    if listening && bridge.state == .connected { listener.start() }
   }
 
   /// Remembered across launches.
