@@ -7,10 +7,12 @@ struct R2MenuApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var bridge = Bridge.shared
   @StateObject private var companion = Companion(bridge: Bridge.shared)
+  static weak var companion: Companion?
 
   var body: some Scene {
     MenuBarExtra {
       MenuContent(bridge: bridge, companion: companion)
+        .onAppear { R2MenuApp.companion = companion }
     } label: {
       Image(systemName: icon)
     }
@@ -27,6 +29,7 @@ struct R2MenuApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Quit waits for the daemon to shut down (it sleeps R2 and disconnects), up to 5 s.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    R2MenuApp.companion?.ollama.stopIfOwned()
     guard Bridge.shared.ownsDaemon else { return .terminateNow }
     Bridge.shared.stopDaemon(timeout: 5) { sender.reply(toApplicationShouldTerminate: true) }
     return .terminateLater
@@ -37,6 +40,7 @@ struct MenuContent: View {
   @ObservedObject var bridge: Bridge
   @ObservedObject var companion: Companion
   @ObservedObject var listener: Listener
+  @ObservedObject var ollama: Ollama
   @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
   @State private var listening = false
 
@@ -44,6 +48,7 @@ struct MenuContent: View {
     self.bridge = bridge
     self.companion = companion
     self.listener = companion.listener
+    self.ollama = companion.ollama
     _listening = State(initialValue: companion.listening)
   }
 
@@ -56,6 +61,7 @@ struct MenuContent: View {
       Toggle("Listen for “R2” / “Artu”", isOn: $listening)
         .onChange(of: listening) { companion.setListening($0) }
       Text(voiceText)
+      Text(modelText)
       ForEach(companion.transcript.suffix(4), id: \.self) { Text($0) }
       Button("Show Voice Log") { NSWorkspace.shared.open(VoiceLog.url) }
       Button("Edit Phrases…") { _ = Phrases.load(); NSWorkspace.shared.open(Phrases.url) }
@@ -103,9 +109,19 @@ struct MenuContent: View {
     Button("Quit R2 Bridge") { NSApp.terminate(nil) }.keyboardShortcut("q")
   }
 
+  private var modelText: String {
+    switch ollama.status {
+    case .checking: return "Local model: checking…"
+    case .notInstalled: return "Local model: Ollama not installed (brew install ollama)"
+    case .starting: return "Local model: starting Ollama…"
+    case .pulling(let pct): return "Local model: downloading \(Router.model) \(pct)%"
+    case .ready: return "Local model: \(Router.model) ready\(ollama.ownsServer ? "" : " (external server)")"
+    case .failed(let why): return "Local model: \(why)"
+    }
+  }
+
   private var voiceText: String {
     if case .denied(let why) = listener.phase { return why }
-    if !companion.routerReady { return "Ollama model \(Router.model) not found: ollama pull \(Router.model)" }
     if case .hearing = listener.phase { return "Listening…" }
     if listening && !listener.isOn { return "Paused until R2-D2 is back" }
     return listening ? "Push to talk: ⌃⌥R" : "Off. Push to talk still works: ⌃⌥R"

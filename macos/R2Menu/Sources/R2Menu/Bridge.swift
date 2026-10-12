@@ -82,6 +82,7 @@ final class Bridge: ObservableObject {
   func cmd(_ method: String, _ args: [Int] = []) { post("/cmd", json: ["method": method, "args": args]) }
   func play(audio id: Int) { post("/play/audio/\(id)") }
   func play(animation id: Int) { post("/play/animation/\(id)") }
+  func blip(_ family: String) { post("/blip/\(family)") }
 
   private func post(_ path: String, json: [String: Any]? = nil) {
     var request = URLRequest(url: URL(string: config.url + path)!)

@@ -13,6 +13,8 @@ final class Listener: ObservableObject {
   /// Both recognizers' readings of the same sentence, keyed by language, plus the one that heard the wake word.
   var onCommand: ((_ transcripts: [Language: String], _ wokeBy: Language) -> Void)?
   var onWake: ((Language) -> Void)?
+  /// Every partial transcript while a command is being heard, for instant micro-reactions.
+  var onPartial: ((String, Language) -> Void)?
   private var heard: [Language: String] = [:]
   private var lastLogged: [Language: String] = [:]
   private var lastPartialAt = Date.distantPast
@@ -40,9 +42,11 @@ final class Listener: ObservableObject {
   }
 
   private static let locales: [Language: String] = [.en: "en-US", .es: "es-AR"]
+  /// Silence that ends a command. Short, so banter feels quick; the blip covers a cut-off word.
+  static let pause: TimeInterval = 0.8
   // Matched after lowercasing and stripping accents, so "Artú", "Arturo", "R-2", "Artoo" all count.
   // "Artú" often arrives as a bare "Tú"; that is accepted only at the start of a transcript.
-  private static let wake = "(\\b(artu|arto|artur|arturo|arturito|artoo|ar2|r2|r 2|r two|art two|are too|are two|erre dos)\\b|^ ?(tu|too|two|art|arte|harto|r)\\b)"
+  private static let wake = "(\\b(artu|arto|artur|arturo|arturito|artoo|ar2|r2|r 2|r two|art two|are too|are two|part two|or two|our two|erre dos)\\b|^ ?(tu|too|two|art|arte|harto|r)\\b)"
 
   var isOn: Bool { phase != .off }
 
@@ -176,13 +180,14 @@ final class Listener: ObservableObject {
       heard = [lang: command]
       onWake?(lang)
       lastHeard = command
-      armPause(seconds: 1.4)
+      armPause(seconds: Self.pause)
     case .hearing(let owner):
       // Both recognizers keep transcribing; the router picks the language that makes sense.
       heard[lang] = pushToTalk ? text : (Self.afterWake(text, lang) ?? text)
       if owner == lang || pushToTalk {
         lastHeard = heard[lang] ?? text
-        armPause(seconds: 1.4)
+        onPartial?(lastHeard, lang)
+        armPause(seconds: Self.pause)
       }
     default:
       break

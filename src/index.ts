@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { cpus, loadavg } from 'node:os'
 import { join } from 'node:path'
-import { Animation, Audio } from './animations'
+import { Animation, Audio, AudioSets, pick } from './animations'
 import { commands, Droid, isCommand, isMood, moodNames } from './droid'
 
 export const PORT = 4242
@@ -56,6 +56,14 @@ const server = createServer(async (req, res) => {
     const mood = react[1]
     if (!isMood(mood)) return json(res, 400, { error: `unknown mood, use one of ${moodNames.join(', ')}` })
     return queue(res, () => droid.react(mood), { queued: mood })
+  }
+
+  // A quick clip from a family (chatty, positive, ...), queued like everything else.
+  const blip = post && path.match(/^\/blip\/([a-z]+)$/)
+  if (blip) {
+    const set = (AudioSets as Record<string, readonly number[]>)[blip[1]]
+    if (!set) return json(res, 400, { error: `unknown family, use one of ${Object.keys(AudioSets).join(', ')}` })
+    return queue(res, () => droid.play('audio', pick(set)), { blip: blip[1] })
   }
 
   const play = post && path.match(/^\/play\/(animation|audio)\/(\d{1,5})$/)

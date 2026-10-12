@@ -93,3 +93,16 @@ export const Audio = {
 } as const
 
 export type Audio = (typeof Audio)[keyof typeof Audio]
+
+// Families of clips, for reactions that should not sound the same twice (IDs from the same table).
+export const AudioSets = {
+  chatty: [1950, 1959, 1966, 1977, 1987, 2002, 2007, 2010, 2019, 2028, 2039, 2061],
+  positive: [3302, 3309, 3318, 3326, 3340, 3353, 3358, 3364],
+  negative: [3101, 3111, 3115, 3121, 3132, 3136],
+  laugh: [2919, 2935, 2950, 2955],
+  excited: [2600, 2615, 2633, 2644, 2654],
+  sad: [3484, 3495, 3518, 3526],
+  hey: [2813, 2824, 2828, 2833, 2841],
+} as const
+
+export const pick = (set: readonly number[]) => set[Math.floor(Math.random() * set.length)]

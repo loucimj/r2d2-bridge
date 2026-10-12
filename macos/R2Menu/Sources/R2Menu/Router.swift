@@ -34,22 +34,34 @@ enum Router {
 
   static let system = """
   You are the intent router for R2-D2, a desk robot. The user spoke ONE sentence, in Spanish or English. Usually you get the sentence with its language. When the language is unknown you get two transcripts, one from an English speech recognizer and one from a Spanish one: one is coherent, the other is the wrong language's best guess and reads like noise; decide which language the user spoke and route that transcript.
-  Reply ONLY with JSON: {"language": "en" or "es", "intent": string, "arg": string, "reply": string, "mood": string}
+  Reply ONLY with JSON, fields in exactly this order: {"mood": string, "language": "en" or "es", "intent": string, "arg": string, "reply": string}
   intent is one of: spotify.play, spotify.pause, spotify.next, web.search, calendar.show, open.app, praise, chat, claude
   - web.search: arg is the search query. open.app: arg is the app name. spotify.play: arg is the song or artist ONLY if one is named, else "". Never copy the whole sentence into arg.
   - claude: anything needing information from the computer, files, email, calendar contents, or real reasoning.
   - chat: small talk. praise: the user is approving or thanking.
   reply: what R2 says back, at most 12 words, in the language you chose. Spanish must be rioplatense (vos, dale, bárbaro). Cheeky droid personality.
-  mood is one of: happy, alarm, attention, thinking, sad, busy. happy for praise and fun actions, attention for questions, thinking when handing off to claude, sad when you can't help.
+  mood comes FIRST and is one of: happy, excited, laugh, chatty, attention, thinking, sad, no, alarm, busy. happy or excited for praise and good news, laugh for jokes, chatty for small talk, no for refusals or teasing, attention for questions, thinking when handing off to claude, sad when you can't help.
+  For chat and praise the reply is optional: R2 answers in beeps, so leave reply "" unless words add something.
   Examples:
-  Spanish: estuvo bien eso, no -> {"language":"es","intent":"praise","arg":"","reply":"¡Obvio que estuvo bien, soy un droide!","mood":"happy"}
-  English: play some music on spotify -> {"language":"en","intent":"spotify.play","arg":"","reply":"Music coming right up.","mood":"happy"}
-  Spanish: buscá recetas de empanadas -> {"language":"es","intent":"web.search","arg":"recetas de empanadas","reply":"Dale, buscando empanadas.","mood":"attention"}
+  Spanish: estuvo bien eso, no -> {"mood":"happy","language":"es","intent":"praise","arg":"","reply":""}
+  English: play some music on spotify -> {"mood":"happy","language":"en","intent":"spotify.play","arg":"","reply":"Music coming right up."}
+  Spanish: buscá recetas de empanadas -> {"mood":"attention","language":"es","intent":"web.search","arg":"recetas de empanadas","reply":"Dale, buscando empanadas."}
+  English: you are a lazy droid -> {"mood":"no","language":"en","intent":"chat","arg":"","reply":""}
   """
 
-  static let moods: Set<String> = ["happy", "alarm", "attention", "thinking", "sad", "busy"]
+  static let moods: Set<String> = ["happy", "excited", "laugh", "chatty", "attention", "thinking", "sad", "no", "alarm", "busy"]
 
-  static func decide(_ transcripts: [Listener.Language: String], wokeBy: Listener.Language) async -> Decision {
+  /// The last few exchanges, so "¿y eso?" has something to refer to. Cheap: the prefix is cached by Ollama.
+  private static var history: [[String: String]] = []
+
+  static func remember(_ user: String, _ answer: String) {
+    history.append(["role": "user", "content": user])
+    history.append(["role": "assistant", "content": answer])
+    if history.count > 6 { history.removeFirst(history.count - 6) }
+  }
+
+  /// `onMood` fires as soon as the streamed answer names the mood, well before the rest arrives.
+  static func decide(_ transcripts: [Listener.Language: String], wokeBy: Listener.Language, onMood: ((String) -> Void)? = nil) async -> Decision {
     let started = Date()
     let sure = pickLanguage(transcripts, wokeBy: wokeBy)
     let prompt: String
@@ -61,7 +73,7 @@ enum Router {
       }.joined(separator: "\n")
     }
     do {
-      var decision = try await ask(prompt)
+      var decision = try await ask(prompt, onMood: onMood)
       if !moods.contains(decision.mood) { decision.mood = "attention" }
       if let sure { decision.language = sure.rawValue }
       if decision.language != "en" && decision.language != "es" { decision.language = wokeBy.rawValue }
@@ -124,18 +136,29 @@ enum Router {
     }
   }
 
-  private static func ask(_ text: String) async throws -> Decision {
+  private static func ask(_ text: String, onMood: ((String) -> Void)?) async throws -> Decision {
     var request = URLRequest(url: ollama.appending(path: "api/chat"), timeoutInterval: 20)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONSerialization.data(withJSONObject: [
-      "model": model, "stream": false, "think": false, "format": "json", "keep_alive": "30m",
+      "model": model, "stream": true, "think": false, "format": "json", "keep_alive": "30m",
       "options": ["temperature": 0.2, "num_predict": 120],
-      "messages": [["role": "system", "content": system], ["role": "user", "content": text]],
+      "messages": [["role": "system", "content": system]] + history + [["role": "user", "content": text]],
     ])
-    let (data, _) = try await URLSession.shared.data(for: request)
-    struct Chat: Decodable { struct Message: Decodable { var content: String }; var message: Message }
-    let content = try JSONDecoder().decode(Chat.self, from: data).message.content
+    struct Chunk: Decodable { struct Message: Decodable { var content: String }; var message: Message }
+    let (bytes, _) = try await URLSession.shared.bytes(for: request)
+    var content = ""
+    var moodSent = false
+    for try await line in bytes.lines {
+      guard let chunk = try? JSONDecoder().decode(Chunk.self, from: Data(line.utf8)) else { continue }
+      content += chunk.message.content
+      // The mood is the first field; act on it the moment it is complete.
+      if !moodSent, let m = content.range(of: "\"mood\"\\s*:\\s*\"([a-z]+)\"", options: .regularExpression) {
+        moodSent = true
+        let mood = String(content[m]).replacingOccurrences(of: "^.*\"([a-z]+)\"$", with: "$1", options: .regularExpression)
+        if moods.contains(mood) { onMood?(mood) }
+      }
+    }
     do {
       return try JSONDecoder().decode(Decision.self, from: Data(content.utf8))
     } catch {

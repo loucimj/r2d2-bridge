@@ -69,8 +69,14 @@ with either language ("R2, poné música" is fine). The language is picked from 
 accents, ñ and common words settle most sentences without the model; the rest go to the model
 with both readings and it chooses the coherent one. Replies come back in the language you spoke.
 
-Commands are routed by a local model on [Ollama](https://ollama.com) (`ollama pull qwen3:4b`),
-which answers in about a second with an intent, a one-line reply in your language and an R2 mood:
+Commands are routed by a local model (qwen3:4b) through [Ollama](https://ollama.com). The app
+runs Ollama itself: `brew install ollama` once, and the app starts the server headless, downloads
+the model on first run (progress in the menu) and stops the server on quit. The model streams its
+answer with the mood first, so R2 reacts about a quarter second after you stop talking, before the
+rest of the decision arrives. Banter is answered in beeps from R2's own sound families (chatty,
+laugh, positive, negative, excited, sad); the voice is used only when there is something to say.
+While you are still talking, trigger words ("genial", "no", "jaja", "thanks"…) flicker a LED and
+chirp at once. The last three exchanges are kept so follow-ups make sense. Intents:
 
 - "Artu, poné música" / "R2, play some music" → Spotify plays
 - "R2, search quantum computing" → Safari opens a web search
@@ -117,7 +123,9 @@ curl -X POST http://127.0.0.1:4242/react/thinking
 curl http://127.0.0.1:4242/health
 ```
 
-Moods: `happy`, `alarm`, `attention`, `thinking`, `sad`, `busy`, `idle`. Reactions
+Moods: `happy`, `excited`, `laugh`, `chatty`, `no`, `alarm`, `attention`, `thinking`, `sad`, `busy`,
+`listening`, `welcome`, `goodbye`, `idle`. `POST /blip/<family>` plays one random clip from a sound
+family (`chatty`, `positive`, `negative`, `laugh`, `excited`, `sad`, `hey`). Reactions
 run one at a time in the order received. The daemon also watches CPU load and plays
 `busy` when the 1-minute load average per core goes above 1.5, then `happy` when it drops.
 

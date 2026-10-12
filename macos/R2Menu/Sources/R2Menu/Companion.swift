@@ -9,7 +9,9 @@ final class Companion: ObservableObject {
   @Published private(set) var routerReady = false
 
   let listener = Listener()
+  let ollama = Ollama()
   private let speaker = Speaker()
+  private var lastMicro = Date.distantPast
   private let bridge: Bridge
   private var hotkey: Hotkey?
 
@@ -27,8 +29,10 @@ final class Companion: ObservableObject {
       if now == .connected, !self.listener.isOn { VoiceLog.write("R2 back, listening again"); self.listener.start() }
       if now != .connected, self.listener.isOn { VoiceLog.write("R2 away, listener paused"); self.listener.stop() }
     }
+    listener.onPartial = { [weak self] text, lang in self?.microReact(text, lang) }
     Task {
-      routerReady = await Router.available
+      await ollama.ensureReady()
+      routerReady = ollama.status == .ready
       if routerReady { await Router.warmUp() }
     }
     // Keep the model resident: Ollama drops it after its keep_alive, and a cold start costs 5 s.
@@ -51,6 +55,25 @@ final class Companion: ObservableObject {
     bridge.react("listening") // front LED blue, dome turns with a "hey" chirp
   }
 
+  // Words that get an instant flicker or chirp while you are still talking, before any routing.
+  private static let micro: [(pattern: String, family: String, led: [Int])] = [
+    ("\\b(bien|genial|barbaro|buenisimo|great|awesome|nice|perfect|gracias|thanks)\\b", "positive", [0, 200, 60]),
+    ("\\b(mal|horrible|no|nope|wrong|bad|basta|stop)\\b", "negative", [255, 0, 0]),
+    ("\\b(jaja|jeje|haha|lol|chiste|joke|funny)\\b", "laugh", [255, 200, 0]),
+  ]
+
+  private func microReact(_ text: String, _ lang: Listener.Language) {
+    guard Date().timeIntervalSince(lastMicro) > 1.5 else { return }
+    let plain = Phrases.normalize(text)
+    for rule in Self.micro where plain.range(of: rule.pattern, options: .regularExpression) != nil {
+      lastMicro = Date()
+      bridge.cmd("setR2D2FrontLEDColor", rule.led)
+      bridge.blip(rule.family)
+      VoiceLog.write("micro: \(rule.family) on “\(text)”")
+      return
+    }
+  }
+
   private func handle(_ transcripts: [Listener.Language: String], _ wokeBy: Listener.Language) async {
     busy = true
     defer { busy = false }
@@ -66,13 +89,22 @@ final class Companion: ObservableObject {
       if let target = phrase.open { target.contains("://") ? open(target) : launch(app: target) }
       return
     }
-    let decision = await Router.decide(transcripts, wokeBy: wokeBy)
+    // Heard you: a blip right away, the real mood as soon as the model names it.
+    bridge.blip("chatty")
+    var moodShown: String?
+    let decision = await Router.decide(transcripts, wokeBy: wokeBy) { [weak self] mood in
+      moodShown = mood
+      self?.bridge.react(mood)
+      VoiceLog.write("mood early: \(mood)")
+    }
     let lang = Listener.Language(rawValue: decision.language) ?? wokeBy
     let text = decision.text
     log("🎤 \(text)")
     log("→ \(decision.intent) \(decision.arg.isEmpty ? "" : "“\(decision.arg)”")")
-    speaker.say(decision.reply, language: lang)
-    bridge.react(decision.mood)
+    if moodShown != decision.mood { bridge.react(decision.mood) }
+    // Banter is answered in beeps; words only when the model had something to say.
+    if !decision.reply.isEmpty { speaker.say(decision.reply, language: lang) }
+    Router.remember(text, decision.reply.isEmpty ? "[\(decision.mood)]" : decision.reply)
     VoiceLog.write("acting: \(decision.intent)")
 
     switch decision.intent {

@@ -1,8 +1,8 @@
 import type { EventEmitter } from 'node:events'
-import { Animation, Audio } from './animations'
+import { Animation, Audio, AudioSets, pick } from './animations'
 import { FakeR2 } from './fake'
 
-export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'listening' | 'welcome' | 'goodbye' | 'idle'
+export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'chatty' | 'laugh' | 'excited' | 'no' | 'listening' | 'welcome' | 'goodbye' | 'idle'
 
 // The part of spherov2.js's R2D2 we use. FakeR2 implements it too.
 export interface R2 {
@@ -45,6 +45,7 @@ const playSound = (r2: R2, id: number) => r2.playR2D2Sound(id >> 8, id & 0xff)
 const moods: Record<Mood, Reaction> = {
   happy: async (r2) => {
     await r2.setR2D2LEDColor(0, 200, 60)
+    await playSound(r2, pick(AudioSets.positive))
     await r2.playAnimation(Animation.wwmHappy)
     await sleep(3000)
   },
@@ -69,6 +70,7 @@ const moods: Record<Mood, Reaction> = {
   },
   sad: async (r2) => {
     await r2.setR2D2LEDColor(60, 0, 120)
+    await playSound(r2, pick(AudioSets.sad))
     await r2.playAnimation(Animation.wwmSad)
     await sleep(3000)
   },
@@ -76,6 +78,34 @@ const moods: Record<Mood, Reaction> = {
     await r2.setR2D2LEDColor(255, 60, 0)
     await r2.playAnimation(Animation.wwmJittery)
     await sleep(3000)
+  },
+  // Conversation moods: short, varied, no words. R2 answers banter in beeps.
+  chatty: async (r2) => {
+    await r2.setR2D2LogicDisplaysIntensity(255)
+    await playSound(r2, pick(AudioSets.chatty))
+    await r2.turnDome(20)
+    await sleep(350)
+    await r2.turnDome(-20)
+    await sleep(350)
+    await r2.turnDome(0)
+  },
+  laugh: async (r2) => {
+    await r2.setR2D2LEDColor(255, 200, 0)
+    await playSound(r2, pick(AudioSets.laugh))
+    await r2.playAnimation(Animation.wwmLaugh)
+    await sleep(2500)
+  },
+  excited: async (r2) => {
+    await r2.setR2D2LEDColor(0, 255, 120)
+    await playSound(r2, pick(AudioSets.excited))
+    await r2.playAnimation(Animation.wwmExcited)
+    await sleep(2500)
+  },
+  no: async (r2) => {
+    await r2.setR2D2LEDColor(255, 0, 0)
+    await playSound(r2, pick(AudioSets.negative))
+    await r2.playAnimation(Animation.wwmNo)
+    await sleep(2000)
   },
   // Wake word heard: a quick, visible "I'm listening" before the command is understood.
   listening: async (r2) => {
