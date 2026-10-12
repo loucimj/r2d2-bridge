@@ -16,6 +16,28 @@ const NOTES = join(__dirname, '..', 'explore-log.tsv')
 const droid = new Droid()
 const page = readFileSync(join(__dirname, 'demo.html'))
 
+// Timestamps on every log line; the log is the only window into the daemon under the menu bar app.
+for (const level of ['log', 'warn', 'error'] as const) {
+  const original = console[level]
+  console[level] = (...args: unknown[]) => original(new Date().toLocaleTimeString('en-GB'), ...args)
+}
+
+// Watchdog: noble can wedge after the Mac sleeps and never report Bluetooth again. If the droid
+// has been gone for a while, exit; the menu bar app starts a fresh daemon with a fresh stack.
+const WATCHDOG_MS = 3 * 60_000
+let disconnectedSince: number | undefined
+setInterval(() => {
+  if (droid.connected) {
+    disconnectedSince = undefined
+    return
+  }
+  disconnectedSince ??= Date.now()
+  if (Date.now() - disconnectedSince > WATCHDOG_MS) {
+    console.error('R2-D2 unreachable for 3 minutes, exiting so the supervisor can restart the daemon')
+    process.exit(2)
+  }
+}, 15_000)
+
 const server = createServer(async (req, res) => {
   // Not `new URL()`: it throws on targets like "//", which crashed the daemon.
   const path = (req.url ?? '/').split('?')[0]

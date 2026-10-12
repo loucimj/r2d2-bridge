@@ -125,11 +125,11 @@ export class Droid {
       if (!this.stopped) this.attach(new FakeR2())
       return
     }
-    await waitForBluetooth()
     // Loaded lazily: spherov2.js loads noble, which some host processes get killed for.
     const { Scanner } = await import('spherov2.js')
     while (!this.stopped) {
       try {
+        await waitForBluetooth()
         // Typed as R2D2 but resolves to undefined when nothing is found.
         const r2: R2 | undefined = await Scanner.findR2D2()
         if (r2 && this.stopped) {
@@ -245,18 +245,27 @@ export class Droid {
 // `peripheral` is private in spherov2.js but it is the only way to hear about drops.
 const peripheralOf = (r2: R2) => (r2 as unknown as { peripheral: EventEmitter }).peripheral
 
-export async function waitForBluetooth(hintEveryMs = 10_000) {
+export async function waitForBluetooth(hintEveryMs = 10_000, giveUpMs = 60_000) {
   const noble = (await import('@abandonware/noble')).default
   const state = () => (noble as unknown as { state: string }).state
   if (state() === 'poweredOn') return
-  // Never give up: while macOS shows the Bluetooth permission prompt the state stays
-  // "unknown", and the daemon must still be alive when the user clicks Allow.
-  await new Promise<void>((resolve) => {
+  // While macOS shows the Bluetooth permission prompt the state stays "unknown", so this hints
+  // rather than exits. It does give up after a minute: the caller retries, and a fresh wait
+  // re-reads the state, which noble sometimes stops reporting after the Mac sleeps.
+  await new Promise<void>((resolve, reject) => {
     const hint = setInterval(() => console.warn(bluetoothHint(state())), hintEveryMs)
+    const giveUp = setTimeout(() => {
+      cleanup()
+      reject(new Error(`still waiting for Bluetooth (state: ${state()})`))
+    }, giveUpMs)
+    const cleanup = () => {
+      clearInterval(hint)
+      clearTimeout(giveUp)
+      noble.removeListener('stateChange', onChange)
+    }
     const onChange = (s: string) => {
       if (s !== 'poweredOn') return
-      clearInterval(hint)
-      noble.removeListener('stateChange', onChange)
+      cleanup()
       resolve()
     }
     noble.on('stateChange', onChange)
