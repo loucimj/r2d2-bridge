@@ -7,12 +7,10 @@ struct R2MenuApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
   @StateObject private var bridge = Bridge.shared
   @StateObject private var companion = Companion(bridge: Bridge.shared)
-  static weak var companion: Companion?
 
   var body: some Scene {
     MenuBarExtra {
       MenuContent(bridge: bridge, companion: companion)
-        .onAppear { R2MenuApp.companion = companion }
     } label: {
       Image(systemName: icon)
     }
@@ -29,7 +27,7 @@ struct R2MenuApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Quit waits for the daemon to shut down (it sleeps R2 and disconnects), up to 5 s.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    R2MenuApp.companion?.ollama.stopIfOwned()
+    Companion.shared?.ollama.stopIfOwned()
     guard Bridge.shared.ownsDaemon else { return .terminateNow }
     Bridge.shared.stopDaemon(timeout: 5) { sender.reply(toApplicationShouldTerminate: true) }
     return .terminateLater
@@ -111,6 +109,7 @@ struct MenuContent: View {
 
   private var modelText: String {
     switch ollama.status {
+    case .off: return listening ? "Local model: starting…" : "Local model: off while not listening"
     case .checking: return "Local model: checking…"
     case .notInstalled: return "Local model: Ollama not installed (brew install ollama)"
     case .starting: return "Local model: starting Ollama…"

@@ -11,9 +11,9 @@
 // down must never slow or break the session.
 import type { EngineInterface, Register } from 'claude-code'
 
-type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'idle'
+type Mood = string // validated by the daemon, which owns the list (GET /health lists it)
 
-const MOODS: readonly Mood[] = ['happy', 'alarm', 'attention', 'thinking', 'sad', 'busy', 'idle']
+const MOODS = ['happy', 'excited', 'laugh', 'chatty', 'no', 'alarm', 'attention', 'thinking', 'sad', 'busy', 'listening', 'welcome', 'goodbye', 'idle']
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const SOUND_NEGATIVE = 3101 // R2_NEGATIVE_1, see src/animations.ts in r2d2-bridge
 const SOUND_HEY = 2813 // R2_HEY_1
@@ -28,15 +28,25 @@ function show($: EngineInterface, text: string) {
 }
 
 async function post($: EngineInterface, path: string, body?: unknown): Promise<boolean> {
+  return (await send($, path, body)).ok
+}
+
+/** The daemon's answer, or a readable failure when it is unreachable. */
+async function send($: EngineInterface, path: string, body?: unknown): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await $.http.fetch(base + path, {
       method: 'POST',
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     })
-    return res.ok
+    if (res.ok) return { ok: true }
+    let error = `bridge answered ${res.status}`
+    try {
+      error = (JSON.parse(res.text) as { error?: string }).error ?? error
+    } catch {}
+    return { ok: false, error }
   } catch {
-    return false
+    return { ok: false, error: 'R2 bridge is not reachable. Start it with `npm run app` in r2d2-bridge.' }
   }
 }
 
@@ -74,10 +84,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'r2' }, async ($, e) => {
-    const mood = e.args.trim() as Mood
-    if (!MOODS.includes(mood)) return { text: `usage: /r2 ${MOODS.join('|')}` }
-    const ok = await react($, mood)
-    return { text: ok ? `R2: ${mood}` : 'R2 bridge is not reachable. Start it with `npm run app` in r2d2-bridge.' }
+    const mood = e.args.trim()
+    if (!/^[a-z]+$/.test(mood)) return { text: `usage: /r2 ${MOODS.join('|')}` }
+    const sent = await send($, `/react/${mood}`)
+    return { text: sent.ok ? `R2: ${mood}` : `R2: ${sent.error}` }
   })
 
   on('turn.start', async ($, e, next) => {

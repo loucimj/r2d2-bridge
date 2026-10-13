@@ -15,28 +15,39 @@ final class Companion: ObservableObject {
   private let bridge: Bridge
   private var hotkey: Hotkey?
 
+  /// The one instance, for the app delegate at quit time.
+  static weak var shared: Companion?
+
   init(bridge: Bridge) {
     self.bridge = bridge
+    Self.shared = self
     listener.onWake = { [weak self] _ in self?.acknowledgeWake() }
     listener.onCommand = { [weak self] transcripts, wokeBy in Task { await self?.handle(transcripts, wokeBy) } }
     hotkey = Hotkey(keyCode: 15 /* R */, modifiers: [.control, .option]) { [weak self] in self?.listener.captureNow() }
     speaker.onSpeaking = { [weak self] speaking in Task { @MainActor in self?.listener.muted = speaking } }
     // No droid, no point streaming the microphone: pause the listener while R2 is away.
     bridge.onStateChange = { [weak self] _, now in
-      guard let self else { return }
-      VoiceLog.write("state observer: now=\(now.rawValue) listeningPref=\(self.listening) listenerOn=\(self.listener.isOn)")
-      guard self.listening else { return }
-      if now == .connected, !self.listener.isOn { VoiceLog.write("R2 back, listening again"); self.listener.start() }
-      if now != .connected, self.listener.isOn { VoiceLog.write("R2 away, listener paused"); self.listener.stop() }
+      guard let self, self.listening else { return }
+      if now == .connected, !self.listener.isOn {
+        VoiceLog.write("R2 back, listening again")
+        self.listener.start()
+        Task { await self.bringModelUp() }
+      }
+      if now != .connected, self.listener.isOn {
+        VoiceLog.write("R2 away, listener paused")
+        self.listener.stop()
+        self.ollama.unloadModel()
+      }
     }
     listener.onPartial = { [weak self] text, lang in self?.microReact(text, lang) }
-    Task {
-      await ollama.ensureReady()
-      routerReady = ollama.status == .ready
-      if routerReady { await Router.warmUp() }
+    if listening { Task { await bringModelUp() } }
+    // Keep the model resident while listening: Ollama drops it after its keep_alive, a cold start costs 5 s.
+    Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        guard let self, self.listening, self.listener.isOn, self.ollama.status == .ready else { return }
+        await Router.warmUp()
+      }
     }
-    // Keep the model resident: Ollama drops it after its keep_alive, and a cold start costs 5 s.
-    Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in Task { await Router.warmUp() } }
     if listening && bridge.state == .connected { listener.start() }
   }
 
@@ -48,7 +59,20 @@ final class Companion: ObservableObject {
 
   func setListening(_ on: Bool) {
     listening = on
-    on ? listener.start() : listener.stop()
+    if on {
+      if bridge.state == .connected { listener.start() }
+      Task { await bringModelUp() }
+    } else {
+      listener.stop()
+      ollama.stopIfOwned()
+      routerReady = false
+    }
+  }
+
+  private func bringModelUp() async {
+    await ollama.ensureReady()
+    routerReady = ollama.status == .ready
+    if routerReady { await Router.warmUp() }
   }
 
   private func acknowledgeWake() {

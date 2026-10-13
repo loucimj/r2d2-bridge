@@ -71,7 +71,7 @@ final class Bridge: ObservableObject {
       if state == .offline && wantsDaemon { startDaemon() }
     }
     if state != before {
-      VoiceLog.write("bridge state \(before.rawValue) → \(state.rawValue)\(onStateChange == nil ? " (no observer)" : "")")
+      VoiceLog.write("bridge state \(before.rawValue) → \(state.rawValue)")
       onStateChange?(before, state)
     }
   }

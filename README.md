@@ -71,7 +71,9 @@ with both readings and it chooses the coherent one. Replies come back in the lan
 
 Commands are routed by a local model (qwen3:4b) through [Ollama](https://ollama.com). The app
 runs Ollama itself: `brew install ollama` once, and the app starts the server headless, downloads
-the model on first run (progress in the menu) and stops the server on quit. The model streams its
+the model on first run (progress in the menu) and stops the server on quit. The server only runs
+while listening is on: turning the toggle off stops it, turning it on starts it and warms the model.
+While R2 is away the model is unloaded from memory and the server kept, so the return is quick. The model streams its
 answer with the mood first, so R2 reacts about a quarter second after you stop talking, before the
 rest of the decision arrives. Banter is answered in beeps from R2's own sound families (chatty,
 laugh, positive, negative, excited, sad); the voice is used only when there is something to say.
@@ -188,7 +190,7 @@ commentary of a session:
 - turn ends with edits → `happy`; without edits → a "hey" chirp and dome to center
 - turn interrupted → dome to center; model error → `sad`
 - permission or idle prompt → `attention`
-- `/r2 <mood>` fires a mood by hand
+- `/r2 <mood>` fires any mood the daemon knows (`GET /health` lists them)
 
 Run a session with it: `claude --plugin-dir ~/workspaces/loucimj/r2d2-bridge/mod/r2-companion`,
 or add that folder to `CLAUDE_CODE_PLUGIN_DIRS`. The bridge URL is a plugin option

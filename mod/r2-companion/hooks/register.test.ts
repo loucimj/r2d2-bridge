@@ -8,6 +8,10 @@ const engine = (on: On, fetchFails = false) => {
   on('http.fetch', (_$, e) => {
     if (fetchFails) throw new Error('ECONNREFUSED')
     calls.push(`${e.init?.method ?? 'GET'} ${new URL(e.url).pathname} ${e.init?.body ?? ''}`.trim())
+    // The daemon owns the mood list: anything it does not know gets a 400 with a reason.
+    if (/\/react\/dance$/.test(e.url)) {
+      return { value: { status: 400, ok: false, headers: {}, text: '{"error":"unknown mood, use one of happy, alarm"}' } }
+    }
     const text = e.url.endsWith('/health') ? '{"connected":true}' : '{}'
     return { value: { status: 200, ok: true, headers: {}, text } }
   })
@@ -84,14 +88,14 @@ test('a daemon that is down never throws', async ($, on) => {
   await $.turn.complete(turn())
 })
 
-test('/r2 fires a mood and rejects unknown ones', async ($, on) => {
+test('/r2 fires a mood and relays a daemon rejection', async ($, on) => {
   const calls = engine(on)
 
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   const bad = await $.command.run(run('dance'))
   const good = await $.command.run(run('alarm'))
 
-  expect(bad.text).toContain('usage')
+  expect(bad.text).toContain('unknown mood')
   expect(good.text).toBe('R2: alarm')
   expect(calls).toContain('POST /react/alarm')
 })

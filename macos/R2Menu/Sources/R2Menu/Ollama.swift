@@ -5,9 +5,9 @@ import Foundation
 /// and stops a server it started when the app quits.
 @MainActor
 final class Ollama: ObservableObject {
-  enum Status: Equatable { case checking, notInstalled, starting, pulling(Int), ready, failed(String) }
+  enum Status: Equatable { case off, checking, notInstalled, starting, pulling(Int), ready, failed(String) }
 
-  @Published private(set) var status: Status = .checking
+  @Published private(set) var status: Status = .off
   private var server: Process?
   private var puller: Process?
   private let base = Router.ollama
@@ -23,6 +23,7 @@ final class Ollama: ObservableObject {
 
   /// Brings the server and the model up, then returns once the model can answer.
   func ensureReady() async {
+    status = .checking
     if await serverAnswers() == false {
       guard startServer() else { return }
       for _ in 0..<40 where await serverAnswers() == false { try? await Task.sleep(for: .milliseconds(250)) }
@@ -35,9 +36,24 @@ final class Ollama: ObservableObject {
     status = await Router.available ? .ready : .failed("model \(Router.model) still missing")
   }
 
+  /// Listening off: nothing needs the model, so a server this app started goes away with it.
   func stopIfOwned() {
-    server?.terminate()
+    if let server, server.isRunning {
+      server.terminate()
+      VoiceLog.write("ollama serve stopped")
+    }
     server = nil
+    status = .off
+  }
+
+  /// R2 away: free the model's memory (about 2.5 GB) but keep the server, so coming back is quick.
+  func unloadModel() {
+    var request = URLRequest(url: base.appending(path: "api/generate"), timeoutInterval: 5)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": Router.model, "keep_alive": 0])
+    URLSession.shared.dataTask(with: request).resume()
+    VoiceLog.write("model unloaded")
   }
 
   private func serverAnswers() async -> Bool {
