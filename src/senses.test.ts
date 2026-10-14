@@ -26,7 +26,7 @@ test('a lift then a calm stretch is grabbed then set down', () => {
 test('hard jolts in a row are a shake', () => {
   const jolt = (t: number): Sample => ({ ...rest(t), accel: { x: 2, y: 0, z: 1 } })
   const events = run([...every(0, 500, rest), ...every(500, 1500, jolt), ...every(1500, 5000, rest)])
-  assert.ok(events.includes('shaken'), `got ${events}`)
+  assert.ok(events.includes('shaken') && !events.includes('grabbed'), `got ${events}`)
 })
 
 test('lying on its side is tipped over, standing up again is righted', () => {
@@ -39,4 +39,25 @@ test('the same event is not repeated within the cooldown', () => {
   const jolt = (t: number): Sample => ({ ...rest(t), accel: { x: 2, y: 0, z: 1 } })
   const events = run(every(0, 2500, jolt))
   assert.equal(events.filter((e) => e === 'shaken').length, 1)
+})
+
+test('one spike then calm is a tap, not a grab', () => {
+  const spike = (t: number): Sample => ({ ...rest(t), accel: { x: 0.3, y: 0, z: 1.3 }, gyro: { x: 0, y: 0, z: 0 } })
+  const events = run([...every(0, 1000, rest), spike(1000), ...every(1250, 3000, rest)])
+  assert.deepEqual(events, ['tapped'])
+})
+
+test('a gesture interrupted by R2 moving itself still ends in set down', () => {
+  const s = new Senses()
+  const lift = (t: number): Sample => ({ ...rest(t), accel: { x: 0.2, y: 0.1, z: 1.4 }, gyro: { x: 80, y: 0, z: 10 } })
+  const events = [...every(0, 500, rest), ...every(500, 1500, lift)].flatMap((x) => s.feed(x))
+  s.reset() // R2 plays its startled animation
+  events.push(...every(4000, 7000, rest).flatMap((x) => s.feed(x)))
+  assert.deepEqual(events, ['grabbed', 'setDown'])
+})
+
+test('a lift that tilts R2 is a grab even if brief', () => {
+  const tiltUp = (t: number): Sample => ({ ...rest(t), accel: { x: 0.3, y: 0, z: 1.3 }, angles: { pitch: 25, roll: 0, yaw: 0 } })
+  const events = run([...every(0, 500, rest), tiltUp(500), tiltUp(750), ...every(1000, 4000, rest)])
+  assert.equal(events[0], 'grabbed')
 })

@@ -213,9 +213,8 @@ export class Droid {
   private senses = new Senses()
   /** Until when R2 is moving on its own (an animation), so its own motion is not read as a grab. */
   private selfMovingUntil = 0
-  private pendingTap?: NodeJS.Timeout
   /** The last touch event, for /health and tuning. */
-  lastSense?: { event: SenseEvent | 'tap'; at: string }
+  lastSense?: { event: SenseEvent; at: string }
   /** Last signal strength in dBm, for /health and tuning. */
   rssi?: number
 
@@ -330,7 +329,7 @@ export class Droid {
   /** Sensor stream + collision events → touch reactions. The fake droid has neither and is skipped. */
   private startSensing(r2: R2) {
     const sensing = r2 as unknown as Partial<Sensing>
-    if (!sensing.on || !sensing.configureSensorStream || !sensing.enableCollisionDetection) return
+    if (!sensing.on || !sensing.configureSensorStream) return
     this.senses = new Senses()
     const log = process.env.R2_SENSE_LOG === '1'
     sensing.on('onSensor', (data) => {
@@ -341,30 +340,21 @@ export class Droid {
       if (Date.now() < this.selfMovingUntil) return this.senses.reset()
       for (const e of this.senses.feed(sample)) this.onSense(e)
     })
-    sensing.on('onCollision', () => {
-      if (this.r2 !== r2 || Date.now() < this.selfMovingUntil) return
-      // A grab also jolts; wait a moment and drop the tap if a grab followed.
-      clearTimeout(this.pendingTap)
-      this.pendingTap = setTimeout(() => this.onSense('tap'), 700)
-    })
-    // Not queued behind reactions: these are setup commands; failures only mean no touch events.
+    // R2-D2 never sends collision events (checked on firmware 7.0), so taps come from the stream too.
+    // Not queued behind reactions: a setup command; failure only means no touch events.
     sensing.configureSensorStream().catch((e) => console.warn('sensor stream not available:', errorText(e)))
-    sensing.configureCollisionDetection?.().catch(() => {})
-    sensing.enableCollisionDetection().catch((e) => console.warn('collision detection not available:', errorText(e)))
   }
 
-  private static readonly touchMoods: Record<SenseEvent | 'tap', Mood | undefined> = {
+  private static readonly touchMoods: Record<SenseEvent, Mood | undefined> = {
+    tapped: 'tapped',
     grabbed: 'startled',
     setDown: 'relieved',
     shaken: 'dizzy',
     tippedOver: 'help',
     righted: 'relieved',
-    tap: 'tapped',
   }
 
-  private onSense(e: SenseEvent | 'tap') {
-    if (e === 'tap' && this.lastSense?.event === 'grabbed' && Date.now() - Date.parse(this.lastSense.at) < 1500) return
-    if (e === 'grabbed') clearTimeout(this.pendingTap)
+  private onSense(e: SenseEvent) {
     this.lastSense = { event: e, at: new Date().toISOString() }
     console.log(`touch: ${e}`)
     const mood = Droid.touchMoods[e]
@@ -438,10 +428,8 @@ type SensorData = {
   angles?: { pitch: number; roll: number; yaw: number }
 }
 type Sensing = {
-  on(event: 'onSensor' | 'onCollision', handler: (data: unknown) => void): void
+  on(event: 'onSensor', handler: (data: unknown) => void): void
   configureSensorStream(): Promise<void>
-  enableCollisionDetection(): Promise<unknown>
-  configureCollisionDetection(): Promise<unknown>
 }
 type Peripheral = EventEmitter & { updateRssi?: (cb: (err: Error | null, rssi: number) => void) => void }
 const peripheralOf = (r2: R2) => (r2 as unknown as { peripheral: Peripheral }).peripheral
