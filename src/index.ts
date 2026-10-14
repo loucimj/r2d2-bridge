@@ -46,7 +46,7 @@ const server = createServer(async (req, res) => {
 
   if (get && path === '/') return html(res, page)
   if (get && path === '/health') {
-    return json(res, 200, { connected: droid.connected, moods: moodNames, awaySince: droid.awaySince ?? null, rssi: droid.rssi ?? null })
+    return json(res, 200, { connected: droid.connected, moods: moodNames, awaySince: droid.awaySince ?? null, rssi: droid.rssi ?? null, lastTouch: droid.lastSense ?? null })
   }
   if (get && path === '/catalog') return json(res, 200, { moods: moodNames, animations: Animation, audio: Audio, commands })
   if (get && path === '/notes') return json(res, 200, readNotes())

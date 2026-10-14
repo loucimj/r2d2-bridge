@@ -1,8 +1,9 @@
 import type { EventEmitter } from 'node:events'
 import { Animation, Audio, AudioSets, pick } from './animations'
 import { FakeR2 } from './fake'
+import { Senses, type Sample, type SenseEvent } from './senses'
 
-export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'chatty' | 'laugh' | 'excited' | 'no' | 'listening' | 'welcome' | 'goodbye' | 'idle'
+export type Mood = 'happy' | 'alarm' | 'attention' | 'thinking' | 'sad' | 'busy' | 'chatty' | 'laugh' | 'excited' | 'no' | 'listening' | 'welcome' | 'goodbye' | 'startled' | 'relieved' | 'dizzy' | 'help' | 'tapped' | 'idle'
 
 // The part of spherov2.js's R2D2 we use. FakeR2 implements it too.
 export interface R2 {
@@ -116,6 +117,37 @@ const moods: Record<Mood, Reaction> = {
     await sleep(700)
     await r2.turnDome(0)
   },
+  // Touch: picked up, put back, shaken, knocked over, tapped.
+  startled: async (r2) => {
+    await r2.setR2D2LEDColor(255, 0, 0)
+    await playSound(r2, Audio.scream)
+    await r2.playAnimation(Animation.surprised)
+    await sleep(1500)
+  },
+  relieved: async (r2) => {
+    await r2.setR2D2LEDColor(0, 200, 60)
+    await playSound(r2, pick(AudioSets.positive))
+    await r2.playAnimation(Animation.wwmRelieved)
+    await sleep(2000)
+  },
+  dizzy: async (r2) => {
+    await r2.setR2D2LEDColor(255, 120, 0)
+    await playSound(r2, Audio.shortOut)
+    await r2.playAnimation(Animation.shortCircuit)
+    await sleep(2500)
+  },
+  help: async (r2) => {
+    await r2.setR2D2BackLEDcolor(255, 0, 0)
+    await playSound(r2, pick(AudioSets.sad))
+    await sleep(1500)
+  },
+  tapped: async (r2) => {
+    await r2.setR2D2FrontLEDColor(0, 120, 255)
+    await playSound(r2, pick(AudioSets.hey))
+    await r2.turnDome(-40)
+    await sleep(500)
+    await r2.turnDome(0)
+  },
   // Back in range after being away.
   welcome: async (r2) => {
     await r2.setR2D2LEDColor(0, 200, 60)
@@ -178,6 +210,12 @@ export class Droid {
   private disconnectedAt?: number
   private saidGoodbye = false
   private weakReadings = 0
+  private senses = new Senses()
+  /** Until when R2 is moving on its own (an animation), so its own motion is not read as a grab. */
+  private selfMovingUntil = 0
+  private pendingTap?: NodeJS.Timeout
+  /** The last touch event, for /health and tuning. */
+  lastSense?: { event: SenseEvent | 'tap'; at: string }
   /** Last signal strength in dBm, for /health and tuning. */
   rssi?: number
 
@@ -243,7 +281,12 @@ export class Droid {
       const r2 = this.r2
       if (!r2) throw new Error('R2-D2 is not connected')
       console.log(label)
-      await fn(r2)
+      this.selfMovingUntil = Number.MAX_SAFE_INTEGER
+      try {
+        await fn(r2)
+      } finally {
+        this.selfMovingUntil = Date.now() + 1200
+      }
     })
     this.queue = run.catch((e) => console.error(`${label} failed:`, e))
     return run
@@ -277,10 +320,55 @@ export class Droid {
     this.detach = () => peripheral.removeListener('disconnect', onDrop)
     this.keepAlive = setInterval(() => this.ping(), KEEP_ALIVE_MS)
     if (typeof peripheral.updateRssi === 'function') this.rssiTimer = setInterval(() => this.readRssi(r2), RSSI_MS)
+    this.startSensing(r2)
     // Queued so it cannot interleave with a reaction that arrives right after connecting.
     this.queue = this.queue.then(() => r2.setAudioVolume(200)).then(() => moods.idle(r2)).catch(() => {})
     console.log(awayFor ? `R2-D2 ready again after ${Math.round(awayFor / 1000)}s away` : 'R2-D2 ready')
     if (awayFor > GREET_AFTER_MS) this.react('welcome').catch(() => {})
+  }
+
+  /** Sensor stream + collision events → touch reactions. The fake droid has neither and is skipped. */
+  private startSensing(r2: R2) {
+    const sensing = r2 as unknown as Partial<Sensing>
+    if (!sensing.on || !sensing.configureSensorStream || !sensing.enableCollisionDetection) return
+    this.senses = new Senses()
+    const log = process.env.R2_SENSE_LOG === '1'
+    sensing.on('onSensor', (data) => {
+      if (this.r2 !== r2) return
+      const d = data as unknown as SensorData
+      const sample: Sample = { t: Date.now(), accel: d.accelerometer?.filtered, gyro: d.gyro?.filtered, angles: d.angles }
+      if (log) console.log('sense', JSON.stringify(sample))
+      if (Date.now() < this.selfMovingUntil) return this.senses.reset()
+      for (const e of this.senses.feed(sample)) this.onSense(e)
+    })
+    sensing.on('onCollision', () => {
+      if (this.r2 !== r2 || Date.now() < this.selfMovingUntil) return
+      // A grab also jolts; wait a moment and drop the tap if a grab followed.
+      clearTimeout(this.pendingTap)
+      this.pendingTap = setTimeout(() => this.onSense('tap'), 700)
+    })
+    // Not queued behind reactions: these are setup commands; failures only mean no touch events.
+    sensing.configureSensorStream().catch((e) => console.warn('sensor stream not available:', errorText(e)))
+    sensing.configureCollisionDetection?.().catch(() => {})
+    sensing.enableCollisionDetection().catch((e) => console.warn('collision detection not available:', errorText(e)))
+  }
+
+  private static readonly touchMoods: Record<SenseEvent | 'tap', Mood | undefined> = {
+    grabbed: 'startled',
+    setDown: 'relieved',
+    shaken: 'dizzy',
+    tippedOver: 'help',
+    righted: 'relieved',
+    tap: 'tapped',
+  }
+
+  private onSense(e: SenseEvent | 'tap') {
+    if (e === 'tap' && this.lastSense?.event === 'grabbed' && Date.now() - Date.parse(this.lastSense.at) < 1500) return
+    if (e === 'grabbed') clearTimeout(this.pendingTap)
+    this.lastSense = { event: e, at: new Date().toISOString() }
+    console.log(`touch: ${e}`)
+    const mood = Droid.touchMoods[e]
+    if (mood) this.react(mood).catch(() => {})
   }
 
   private readRssi(r2: R2) {
@@ -344,6 +432,17 @@ export class Droid {
 }
 
 // `peripheral` is private in spherov2.js but it is the only way to hear about drops or read signal strength.
+type SensorData = {
+  accelerometer?: { filtered: { x: number; y: number; z: number } }
+  gyro?: { filtered: { x: number; y: number; z: number } }
+  angles?: { pitch: number; roll: number; yaw: number }
+}
+type Sensing = {
+  on(event: 'onSensor' | 'onCollision', handler: (data: unknown) => void): void
+  configureSensorStream(): Promise<void>
+  enableCollisionDetection(): Promise<unknown>
+  configureCollisionDetection(): Promise<unknown>
+}
 type Peripheral = EventEmitter & { updateRssi?: (cb: (err: Error | null, rssi: number) => void) => void }
 const peripheralOf = (r2: R2) => (r2 as unknown as { peripheral: Peripheral }).peripheral
 

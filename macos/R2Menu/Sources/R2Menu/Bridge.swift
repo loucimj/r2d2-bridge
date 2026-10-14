@@ -107,6 +107,7 @@ final class Bridge: ObservableObject {
     process.currentDirectoryURL = URL(fileURLWithPath: config.projectDir)
     process.environment = ProcessInfo.processInfo.environment
       .merging(["PATH": config.nodeBin + ":/usr/bin:/bin"]) { $1 }
+      .merging(UserDefaults.standard.bool(forKey: "senseLog") ? ["R2_SENSE_LOG": "1"] : [:]) { $1 }
     if !FileManager.default.fileExists(atPath: logURL.path) {
       FileManager.default.createFile(atPath: logURL.path, contents: nil)
     }
