@@ -192,8 +192,15 @@ commentary of a session:
 - permission or idle prompt → `attention`
 - `/r2 <mood>` fires any mood the daemon knows (`GET /health` lists them)
 
-Run a session with it: `claude --plugin-dir ~/workspaces/loucimj/r2d2-bridge/mod/r2-companion`,
-or add that folder to `CLAUDE_CODE_PLUGIN_DIRS`. The bridge URL is a plugin option
+Install it once for every session (the repo is its own marketplace, read from this folder, so
+edits apply after `/reload-plugins`):
+
+```bash
+claude plugin marketplace add ~/workspaces/loucimj/r2d2-bridge
+claude plugin install r2-companion@r2d2-bridge --scope user
+```
+
+From GitHub instead: `/plugin install r2-companion --marketplace loucimj/r2d2-bridge`. The bridge URL is a plugin option
 (`bridgeUrl`, default `http://127.0.0.1:4242`). Check it with `claude plugin validate mod/r2-companion`
 and `claude plugin test mod/r2-companion`. A daemon that is down is ignored; nothing in the
 session slows down or breaks.

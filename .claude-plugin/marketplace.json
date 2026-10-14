@@ -1,0 +1,11 @@
+{
+  "name": "r2d2-bridge",
+  "owner": { "name": "Javier Loucim" },
+  "plugins": [
+    {
+      "name": "r2-companion",
+      "source": "./mod/r2-companion",
+      "description": "Your Sphero R2-D2 reacts to Claude Code sessions: thinking, edits, errors, finished turns and permission prompts."
+    }
+  ]
+}
